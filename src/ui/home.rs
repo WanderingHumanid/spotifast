@@ -242,13 +242,17 @@ fn quick_access(app: &mut App, ui: &mut egui::Ui) {
                         pos2(cover.right() + 12.0, rect.top()),
                         pos2(rect.right() - play_room, rect.bottom()),
                     );
-                    crate::bidi::paint_line(
-                        &ui.painter().with_clip_rect(text_rect),
-                        text_rect.left(),
-                        text_rect.right(),
-                        rect.center().y,
-                        name,
-                        theme::bold(14.5),
+                    let font = theme::bold(18.0);
+                    let galley =
+                        widgets::ellipsized(ui, name, font, palette.text, text_rect.width(), 1);
+                    let text_x = if crate::bidi::is_rtl(name) {
+                        text_rect.right() - galley.size().x
+                    } else {
+                        text_rect.left()
+                    };
+                    ui.painter().with_clip_rect(text_rect).galley(
+                        pos2(text_x, rect.center().y - galley.size().y / 2.0),
+                        galley,
                         palette.text,
                     );
                     if hovered && let Some(uri) = uri {
@@ -1053,14 +1057,16 @@ mod tests {
                 .and_then(|image| image.width)
         };
         app.pixels_per_point = 1.0;
+        // The playlist carries the tall 480x800 demo fixture, so that is the
+        // only image either display density can choose.
         assert_eq!(
             width(quick_access_tiles(&app)[1].image.as_deref()),
-            Some(300)
+            Some(480)
         );
         app.pixels_per_point = 3.0;
         assert_eq!(
             width(quick_access_tiles(&app)[1].image.as_deref()),
-            Some(300)
+            Some(480)
         );
         let _ = std::fs::remove_dir_all(root);
     }

@@ -11,8 +11,10 @@ pub mod home;
 mod keys;
 pub mod library;
 pub mod login;
+mod lucid;
 mod lyrics;
 pub mod new_releases;
+mod now_playing;
 pub mod player_bar;
 mod prerelease;
 pub mod queue;
@@ -23,6 +25,7 @@ pub mod show;
 pub mod sidebar;
 pub mod skin_cards;
 mod soloist;
+mod spicy_lyrics;
 pub mod topbar;
 mod update;
 pub mod widgets;
@@ -91,9 +94,23 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             ),
         );
     }
+    let lucid = lucid::enabled(app) && app.lyrics_fullscreen.is_none();
+    if lucid {
+        // Painted before the panels, so their glass has the cover behind it.
+        lucid::backdrop(app, ui);
+        // Lucid keeps one bar across the whole window above the cards.
+        egui::Panel::top("lucid-topbar")
+            .exact_size(theme::top_bar_height() + theme::titlebar_inset(ui.ctx()))
+            .frame(Frame::new().fill(Color32::TRANSPARENT))
+            .show(ui, |ui| topbar::show(app, ui));
+    }
     player_bar::show(app, ui);
     if app.lyrics_fullscreen.is_some() {
-        lyrics::fullscreen(app, ui);
+        if app.spicy_lyrics {
+            spicy_lyrics::fullscreen(app, ui);
+        } else {
+            lyrics::fullscreen(app, ui);
+        }
     } else {
         if app.settings.sidebar_visible {
             sidebar::show(app, ui);
@@ -106,6 +123,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         }
         if app.show_friends_panel {
             friends::side_panel(app, ui);
+        }
+        if app.show_now_playing_panel {
+            now_playing::side_panel(app, ui);
+        }
+        if app.spicy_lyrics {
+            spicy_lyrics::side_panel(app, ui);
         }
         central(app, ui);
     }
@@ -134,7 +157,8 @@ fn main_min_width(page: f32, sidebar: bool, right_panel: bool) -> f32 {
 /// The sidebar's narrowest width.
 pub(crate) const SIDEBAR_MIN_WIDTH: f32 = 210.0;
 
-/// Raise the window's minimum width while the Queue or Lyrics panel is open,
+/// Raise the window's minimum width while the Queue, Lyrics or Spicy Lyrics
+/// panel is open,
 /// so even at its narrowest the page beside the panels keeps the room its
 /// top bar needs (#624), and lower it again once they close. Window managers
 /// that tile ignore the minimum; the panels still give way there.
@@ -151,7 +175,12 @@ fn keep_room_for_panels(app: &App, ctx: &Context) {
     let width = main_min_width(
         topbar::least_width(ctx),
         panels && app.settings.sidebar_visible,
-        panels && (app.show_queue_panel || app.show_lyrics_panel || app.show_friends_panel),
+        panels
+            && (app.show_queue_panel
+                || app.show_lyrics_panel
+                || app.show_friends_panel
+                || app.show_now_playing_panel
+                || app.spicy_lyrics),
     )
     .round();
     let id = Id::new("main-min-width");
@@ -253,45 +282,13 @@ where
 }
 
 fn page_tint(app: &mut App) -> Option<Color32> {
-    let page = app.page().clone();
-    let image = match &page {
-        Page::Playlist(id) => app
-            .playlist_pages
-            .get(id)
-            .and_then(|page| page.playlist.get())
-            .or_else(|| app.known_playlist(id))
-            .and_then(|playlist| pick_image(&playlist.images, 64))
-            .map(str::to_string),
-        Page::Album(id) => app
-            .album_pages
-            .get(id)
-            .and_then(|page| page.album.get())
-            .or_else(|| app.known_album(id))
-            .and_then(|album| pick_image(&album.images, 64))
-            .map(str::to_string),
-        Page::Artist(id) => app
-            .artist_pages
-            .get(id)
-            .and_then(|page| page.artist.get())
-            .or_else(|| app.known_artist(id))
-            .and_then(|artist| pick_image(&artist.images, 64))
-            .map(str::to_string),
-        Page::Show(id) => app
-            .show_pages
-            .get(id)
-            .and_then(|page| page.show.get())
-            .or_else(|| app.known_show(id))
-            .and_then(|show| pick_image(&show.images, 64))
-            .map(str::to_string),
-        Page::Radio(seed) => pick_image(&app.radio_images(seed), 64).map(str::to_string),
-        Page::LikedSongs => {
-            return app
-                .settings
-                .accent_from_art
-                .then_some(Color32::from_rgb(0x50, 0x38, 0xc8));
-        }
-        _ => None,
-    };
+    if matches!(app.page(), Page::LikedSongs) {
+        return app
+            .settings
+            .accent_from_art
+            .then_some(Color32::from_rgb(0x50, 0x38, 0xc8));
+    }
+    let image = page_art(app, 64);
     if !app.settings.accent_from_art && image.is_some() {
         return None;
     }
@@ -301,94 +298,166 @@ fn page_tint(app: &mut App) -> Option<Color32> {
     }
 }
 
+/// The current page's cover, for the tint and for Lucid's blurred backdrop.
+/// A page with no artwork falls back to the playing song's cover at the call
+/// site.
+pub(crate) fn page_art(app: &App, target: u32) -> Option<String> {
+    let page = app.page().clone();
+    match &page {
+        Page::Playlist(id) => app
+            .playlist_pages
+            .get(id)
+            .and_then(|page| page.playlist.get())
+            .or_else(|| app.known_playlist(id))
+            .and_then(|playlist| pick_image(&playlist.images, target))
+            .map(str::to_string),
+        Page::Album(id) => app
+            .album_pages
+            .get(id)
+            .and_then(|page| page.album.get())
+            .or_else(|| app.known_album(id))
+            .and_then(|album| pick_image(&album.images, target))
+            .map(str::to_string),
+        Page::Artist(id) => app
+            .artist_pages
+            .get(id)
+            .and_then(|page| page.artist.get())
+            .or_else(|| app.known_artist(id))
+            .and_then(|artist| pick_image(&artist.images, target))
+            .map(str::to_string),
+        Page::Show(id) => app
+            .show_pages
+            .get(id)
+            .and_then(|page| page.show.get())
+            .or_else(|| app.known_show(id))
+            .and_then(|show| pick_image(&show.images, target))
+            .map(str::to_string),
+        Page::Radio(seed) => pick_image(&app.radio_images(seed), target).map(str::to_string),
+        _ => None,
+    }
+}
+
 fn central(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let tint = page_tint(app);
-    egui::CentralPanel::default()
-        .frame(Frame::new().fill(palette.window))
-        .show(ui, |ui| {
-            let rect = ui.max_rect();
-            let page = app.page().clone();
-            let overview = matches!(
-                page,
-                Page::Home | Page::Search | Page::Settings | Page::Queue
-            );
-            // The wash belongs to the page's hero, so it scrolls away with
-            // it. The page's offset is known once it has been laid out, so
-            // the previous frame's serves.
-            let scrolled_id = Id::new(("page-scrolled", page.encode()));
-            let scrolled = ui
-                .ctx()
-                .data(|data| data.get_temp::<f32>(scrolled_id))
-                .unwrap_or(0.0);
-            let countdown = matches!(&page, Page::Album(id)
+    let frame = if lucid::enabled(app) {
+        lucid::page_frame(app)
+    } else {
+        Frame::new().fill(palette.window)
+    };
+    egui::CentralPanel::default().frame(frame).show(ui, |ui| {
+        let rect = ui.max_rect();
+        let page = app.page().clone();
+        let overview = matches!(
+            page,
+            Page::Home | Page::Search | Page::Settings | Page::Queue
+        );
+        // The wash belongs to the page's hero, so it scrolls away with
+        // it. The page's offset is known once it has been laid out, so
+        // the previous frame's serves.
+        let scrolled_id = Id::new(("page-scrolled", page.encode()));
+        let scrolled = ui
+            .ctx()
+            .data(|data| data.get_temp::<f32>(scrolled_id))
+            .unwrap_or(0.0);
+        // Lucid's page glow sits under everything the page draws, and only
+        // while the cover background is chosen.
+        if lucid::enabled(app) {
+            lucid::under_main_view(app, ui, rect);
+        }
+        let countdown = matches!(&page, Page::Album(id)
                 if app.album_pages.get(id).is_some_and(|page| page.prerelease.is_some()));
-            // Countdown pages own their hero gradient. The generic artwork wash
-            // otherwise leaves an unrelated color band behind the search bar.
-            if !countdown && let Some((top, bottom)) = header_wash(&palette, overview, tint) {
+        // Countdown pages own their hero gradient. The generic artwork wash
+        // otherwise leaves an unrelated color band behind the search bar.
+        if !countdown
+            && !lucid::enabled(app)
+            && let Some((top, bottom)) = header_wash(&palette, overview, tint)
+        {
+            if lucid::enabled(app) {
+                // A flat tint with the card's own top corners, so the
+                // header does not paint a square over the rounded card.
+                let alpha = if palette.dark { 44 } else { 26 };
+                let tint = Color32::from_rgba_unmultiplied(top.r(), top.g(), top.b(), alpha);
+                ui.painter().rect_filled(
+                    header_rect(rect, scrolled),
+                    CornerRadius {
+                        nw: lucid::RADIUS,
+                        ne: lucid::RADIUS,
+                        sw: 0,
+                        se: 0,
+                    },
+                    tint,
+                );
+            } else {
                 widgets::paint_vertical_gradient(ui, header_rect(rect, scrolled), top, bottom);
             }
-            ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
-            // egui fades a scrolled page's edge into the panel's plain
-            // colour, which shows as a pale band over a cover's tint; the
-            // page casts a shadow under the header instead.
-            ui.spacing_mut().scroll.fade.strength = 0.0;
+        }
+        ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
+        // egui fades a scrolled page's edge into the panel's plain
+        // colour, which shows as a pale band over a cover's tint; the
+        // page casts a shadow under the header instead.
+        ui.spacing_mut().scroll.fade.strength = 0.0;
+        if !lucid::enabled(app) {
             topbar::show(app, ui);
-            // One banner at a time: a song that will not play matters more
-            // than a slow app, which waits its turn.
-            if app.dialog.is_none() && page != Page::Settings {
-                if app.soloist_waiting() {
-                    soloist::banner(app, ui);
-                } else if app.audio_key_banner {
-                    audio_key_banner(app, ui);
-                } else if app.slow_banner {
-                    slow_banner(app, ui);
-                }
+        }
+        // One banner at a time: a song that will not play matters more
+        // than a slow app, which waits its turn.
+        if app.dialog.is_none() && page != Page::Settings {
+            if app.soloist_waiting() {
+                soloist::banner(app, ui);
+            } else if app.audio_key_banner {
+                audio_key_banner(app, ui);
+            } else if app.slow_banner {
+                slow_banner(app, ui);
             }
-            let page_key = page.encode();
-            let mut area = egui::ScrollArea::vertical()
-                .id_salt(("page", &page_key))
-                .auto_shrink([false, false]);
-            if let Some((_, offset)) = app.restore_scroll.take().filter(|(at, _)| *at == page_key) {
-                area = area.vertical_scroll_offset(offset);
-            }
-            let scroll = crate::autoscroll::show(ui, area, egui::Vec2b::new(false, true), |ui| {
-                Frame::new()
-                    .inner_margin(Margin {
-                        left: widgets::PAGE_PADDING as i8,
-                        right: widgets::PAGE_PADDING as i8,
-                        top: 4,
-                        bottom: 48,
-                    })
-                    .show(ui, |ui| {
-                        ui.set_min_width(ui.available_width());
-                        match page {
-                            Page::Home => home::show(app, ui),
-                            Page::TopSongs => collection::top_songs(app, ui),
-                            Page::NewReleases => new_releases::page(app, ui),
-                            Page::Search => search::show(app, ui),
-                            Page::LikedSongs => collection::liked(app, ui),
-                            Page::Albums | Page::Artists | Page::Podcasts | Page::Episodes => {
-                                library::show(app, ui, page)
-                            }
-                            Page::Playlist(id) => collection::playlist(app, ui, &id),
-                            Page::Album(id) => collection::album(app, ui, &id),
-                            Page::Artist(id) => artist::show(app, ui, &id),
-                            Page::Show(id) => show::show(app, ui, &id),
-                            Page::Radio(seed) => radio::radio(app, ui, &seed),
-                            Page::Queue => queue::page(app, ui),
-                            Page::Settings => settings::show(app, ui),
+        }
+        let page_key = page.encode();
+        let mut area = egui::ScrollArea::vertical()
+            .id_salt(("page", &page_key))
+            .auto_shrink([false, false]);
+        if lucid::enabled(app) {
+            area = area.scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
+        }
+        if let Some((_, offset)) = app.restore_scroll.take().filter(|(at, _)| *at == page_key) {
+            area = area.vertical_scroll_offset(offset);
+        }
+        let scroll = crate::autoscroll::show(ui, area, egui::Vec2b::new(false, true), |ui| {
+            Frame::new()
+                .inner_margin(Margin {
+                    left: widgets::PAGE_PADDING as i8,
+                    right: widgets::PAGE_PADDING as i8,
+                    top: 4,
+                    bottom: 48,
+                })
+                .show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    match page {
+                        Page::Home => home::show(app, ui),
+                        Page::TopSongs => collection::top_songs(app, ui),
+                        Page::NewReleases => new_releases::page(app, ui),
+                        Page::Search => search::show(app, ui),
+                        Page::LikedSongs => collection::liked(app, ui),
+                        Page::Albums | Page::Artists | Page::Podcasts | Page::Episodes => {
+                            library::show(app, ui, page)
                         }
-                    });
-                if app.dialog.is_none() && !app.show_devices {
-                    keys::scroll_page(ui);
-                }
-            });
-            app.page_scroll = Some((page_key, scroll.state.offset.y));
-            ui.ctx()
-                .data_mut(|data| data.insert_temp(scrolled_id, scroll.state.offset.y));
-            header_shadow(ui, scroll.inner_rect, scroll.state.offset.y, palette.dark);
+                        Page::Playlist(id) => collection::playlist(app, ui, &id),
+                        Page::Album(id) => collection::album(app, ui, &id),
+                        Page::Artist(id) => artist::show(app, ui, &id),
+                        Page::Show(id) => show::show(app, ui, &id),
+                        Page::Radio(seed) => radio::radio(app, ui, &seed),
+                        Page::Queue => queue::page(app, ui),
+                        Page::Settings => settings::show(app, ui),
+                    }
+                });
+            if app.dialog.is_none() && !app.show_devices {
+                keys::scroll_page(ui);
+            }
         });
+        app.page_scroll = Some((page_key, scroll.state.offset.y));
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(scrolled_id, scroll.state.offset.y));
+        header_shadow(ui, scroll.inner_rect, scroll.state.offset.y, palette.dark);
+    });
 }
 
 /// Where the "Why?" link of the slow-app banner leads.
@@ -555,7 +624,11 @@ fn header_wash(
     art: Option<Color32>,
 ) -> Option<(Color32, Color32)> {
     if let Some(art) = art {
-        let strength = if overview { 0.45 } else { 0.85 };
+        let strength = if palette.dark {
+            if overview { 0.45 } else { 0.85 }
+        } else {
+            0.10
+        };
         return Some((blend(palette.window, art, strength), palette.window));
     }
     (palette.tint.a() > 0).then_some((palette.tint, Color32::TRANSPARENT))

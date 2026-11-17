@@ -51,7 +51,10 @@ struct Cli {
 
     /// Extra demo surfaces: a comma-separated list of `queue`, `playing-next`,
     /// `devices`, `sonos-idle`, `sonos-active`, `cast-idle`, `cast-connecting`, `phone-playing`,
-    /// `shortcuts`, `create`, `light`, `system-light`, `system-dark`, `focus`, `update`, `personal-app`,
+    /// `shortcuts`, `create`, `light`, `lucid`, `lucid-light`, `lucid-dark`,
+    /// `system-light`, `system-dark`,
+    /// `spicy-lyrics`, `spicy-lyrics-timed`, `spicy-lyrics-fullscreen`, `focus`,
+    /// `update`, `personal-app`, `settings-lyrics`,
     /// `windows-taskbar`, `start-in-tray`, `german`, `lyrics`, `lyrics-fullscreen`, `collection-loading`,
     /// `shuffle-selected`, `shuffle-started`, `undated-mix`, `signed-out`, `connecting`, `library-list`,
     /// `library-list-narrow`, `library-list-wide`, `library-grid`, `library-grid-narrow`,
@@ -83,6 +86,11 @@ struct Cli {
     #[arg(long, value_name = "MS", default_value_t = 6000)]
     demo_shot_delay: u64,
 
+    /// Hold demo playback paused at this position, for repeatable frames.
+    #[cfg(feature = "demo")]
+    #[arg(long, value_name = "MS")]
+    demo_position_ms: Option<u32>,
+
     /// Inner window size for `--demo-shot`, as `WIDTHxHEIGHT`.
     #[cfg(feature = "demo")]
     #[arg(long, value_name = "WIDTHxHEIGHT", value_parser = parse_demo_size)]
@@ -99,6 +107,28 @@ struct Cli {
     #[cfg(feature = "demo")]
     #[arg(long, value_name = "X,Y", value_parser = parse_demo_point, conflicts_with = "demo_drag")]
     demo_click: Option<egui::Pos2>,
+
+    /// Rest the pointer at `X,Y` in points before `--demo-shot`, so the shot
+    /// shows a hover treatment.
+    #[cfg(feature = "demo")]
+    #[arg(long, value_name = "X,Y", value_parser = parse_demo_point, conflicts_with_all = ["demo_drag", "demo_click"])]
+    demo_hover: Option<egui::Pos2>,
+
+    /// Press Tab this many times before `--demo-shot`, so the shot shows a
+    /// keyboard focus ring on the control that took it.
+    #[cfg(feature = "demo")]
+    #[arg(long, default_value_t = 0)]
+    demo_tab: u32,
+
+    /// Press Shift+Tab this many times before `--demo-shot`.
+    #[cfg(feature = "demo")]
+    #[arg(long, default_value_t = 0)]
+    demo_shift_tab: u32,
+
+    /// Put keyboard focus on the Now Playing column's close button.
+    #[cfg(feature = "demo")]
+    #[arg(long)]
+    demo_focus_close: bool,
 }
 
 /// Remote control of the running instance, for Raycast scripts, launchers,
@@ -553,6 +583,16 @@ pub(crate) fn run() -> eframe::Result<()> {
     if demo {
         spotifast::demo::populate(&mut app);
         spotifast::demo::apply_flags(&mut app, cli.demo_page.as_deref(), cli.demo_show.as_deref());
+        if let Some(position) = cli.demo_position_ms {
+            app.local.position_ms = position;
+            app.local.playback = spotifast::player::Playback::Paused;
+            if let Some(remote) = app.remote.as_mut() {
+                remote.state.progress_ms = Some(position);
+                remote.state.is_playing = false;
+                remote.received_at = std::time::Instant::now();
+            }
+            app.lyrics_line_shown = None;
+        }
         if let Some(feed) = &cli.demo_update_feed {
             match fastframe_update::Source::local(feed) {
                 Ok(source) => app.update_source = source,
@@ -588,12 +628,21 @@ pub(crate) fn run() -> eframe::Result<()> {
             to,
             frame: 0,
             click: false,
+            hover: false,
         })
         .or(cli.demo_click.map(|at| DemoDrag {
             from: at,
             to: at,
             frame: 0,
             click: true,
+            hover: false,
+        }))
+        .or(cli.demo_hover.map(|at| DemoDrag {
+            from: at,
+            to: at,
+            frame: 0,
+            click: false,
+            hover: true,
         }));
     #[cfg(feature = "demo")]
     let demo_inner = cli.demo_size;
@@ -724,6 +773,12 @@ pub(crate) fn run() -> eframe::Result<()> {
                 shot: creator_shot.clone(),
                 #[cfg(feature = "demo")]
                 drag: demo_drag,
+                #[cfg(feature = "demo")]
+                tabs: cli.demo_tab,
+                #[cfg(feature = "demo")]
+                shift_tabs: cli.demo_shift_tab,
+                #[cfg(feature = "demo")]
+                focus_close: cli.demo_focus_close,
                 stalls: fastframe_shell::StallWatch::default(),
                 screen_asked: None,
             }))
@@ -1188,6 +1243,7 @@ mod native_window_tests {
             to,
             frame: 0,
             click: false,
+            hover: false,
         };
         let frames: Vec<_> = (0..=DemoDrag::rest() + DemoDrag::GLIDE + 5)
             .map(|_| drag.events())
@@ -1219,6 +1275,7 @@ mod native_window_tests {
             to: at,
             frame: 0,
             click: true,
+            hover: false,
         };
         let events: Vec<_> = (0..=DemoDrag::rest() + DemoDrag::GLIDE + 5)
             .flat_map(|_| click.events())
@@ -1302,6 +1359,15 @@ struct Shell {
     /// A drag held for `--demo-drag`, if this run shows one.
     #[cfg(feature = "demo")]
     drag: Option<DemoDrag>,
+    /// Tab presses still to send for a focus-state capture.
+    #[cfg(feature = "demo")]
+    tabs: u32,
+    /// Shift+Tab presses still to send for a focus-state capture.
+    #[cfg(feature = "demo")]
+    shift_tabs: u32,
+    /// Focus the Now Playing close button for a capture.
+    #[cfg(feature = "demo")]
+    focus_close: bool,
     /// Logs a warning when an update freezes the window.
     stalls: fastframe_shell::StallWatch,
     /// Where the window was when it last asked its monitor's refresh rate,
@@ -1441,6 +1507,7 @@ struct DemoDrag {
     to: egui::Pos2,
     frame: u32,
     click: bool,
+    hover: bool,
 }
 
 #[cfg(feature = "demo")]
@@ -1460,6 +1527,9 @@ impl DemoDrag {
         let frame = self.frame;
         self.frame = self.frame.saturating_add(1);
         let rest = Self::rest();
+        if self.hover {
+            return vec![egui::Event::PointerMoved(self.from)];
+        }
         let pos = if frame <= rest {
             self.from
         } else {
@@ -1545,7 +1615,7 @@ impl eframe::App for Shell {
     }
 
     #[cfg(feature = "demo")]
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         if let Some(drag) = self.drag.as_mut() {
             // The script owns the pointer: drop whatever the real one did.
             raw_input.events.retain(|event| {
@@ -1557,6 +1627,31 @@ impl eframe::App for Shell {
                 )
             });
             raw_input.events.extend(drag.events());
+        }
+        if self.tabs > 0 {
+            self.tabs = self.tabs.saturating_sub(1);
+            raw_input.events.push(egui::Event::Key {
+                key: egui::Key::Tab,
+                physical_key: Some(egui::Key::Tab),
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::default(),
+            });
+        }
+        if self.shift_tabs > 0 {
+            self.shift_tabs = self.shift_tabs.saturating_sub(1);
+            raw_input.events.push(egui::Event::Key {
+                key: egui::Key::Tab,
+                physical_key: Some(egui::Key::Tab),
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::SHIFT,
+            });
+        }
+        if self.focus_close {
+            ctx.data_mut(|data| {
+                data.insert_persisted(egui::Id::new("demo-focus-close"), true);
+            });
         }
     }
 

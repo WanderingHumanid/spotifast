@@ -8,6 +8,9 @@ use crate::i18n::{Locale, gettext};
 use egui::{Color32, CornerRadius, Response, Sense, Stroke, Vec2};
 use std::borrow::Cow;
 
+/// Lucid's Material tonal palette, offered as its own Theme choice.
+pub mod lucid;
+
 /// A palette file from the themes directory.
 pub type CustomTheme = fastframe_theme::CustomTheme<Palette>;
 /// The palette files, and the Omarchy palette where the desktop has one.
@@ -553,6 +556,24 @@ pub fn paint_icon(ui: &egui::Ui, icon: Icon, rect: egui::Rect, size: f32, color:
     icon.image(color, size).paint_at(ui, icon_rect);
 }
 
+/// A quiet lyric line still says it can be clicked: a short accent edge
+/// appears on hover or keyboard focus and thickens while the press is held.
+pub fn lyric_edge(ui: &egui::Ui, response: &Response, palette: &Palette, rect: egui::Rect) {
+    focus_ring(ui, response);
+    if response.hovered() || response.has_focus() || response.is_pointer_button_down_on() {
+        let held = response.is_pointer_button_down_on();
+        let width = if held { 3.0 } else { 2.0 };
+        ui.painter().rect_filled(
+            egui::Rect::from_min_size(
+                egui::pos2(rect.left() - 8.0, rect.top() + 4.0),
+                egui::vec2(width, (rect.height() - 8.0).max(8.0)),
+            ),
+            1.0,
+            palette.accent.gamma_multiply(if held { 1.0 } else { 0.6 }),
+        );
+    }
+}
+
 /// Make keyboard focus visible without changing the control's layout.
 pub fn focus_ring(ui: &egui::Ui, response: &Response) {
     if response.has_focus() {
@@ -594,11 +615,12 @@ pub fn icon_button(
         } else {
             color
         };
-        let scale = if response.is_pointer_button_down_on() {
-            0.92
-        } else {
-            1.0
-        };
+        let pressed = response.is_pointer_button_down_on();
+        if pressed {
+            ui.painter()
+                .rect_filled(rect.shrink(2.0), 4.0, hover.gamma_multiply(0.22));
+        }
+        let scale = if pressed { 0.86 } else { 1.0 };
         paint_icon(ui, icon, rect, size * scale, tint);
     }
     focus_ring(ui, &response);
@@ -1009,10 +1031,18 @@ pub fn link(
     response
         .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Link, ui.is_enabled(), &text));
     focus_ring(ui, &response);
-    if response.hovered() {
+    if response.hovered() || response.has_focus() || response.is_pointer_button_down_on() {
         let rect = response.rect;
-        ui.painter()
-            .hline(rect.x_range(), rect.bottom() - 1.0, Stroke::new(1.0, color));
+        let thickness = if response.is_pointer_button_down_on() {
+            2.0
+        } else {
+            1.0
+        };
+        ui.painter().hline(
+            rect.x_range(),
+            rect.bottom() - 1.0,
+            Stroke::new(thickness, color),
+        );
     }
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }

@@ -43,8 +43,75 @@ impl LibrarySort {
 pub enum ThemeChoice {
     Dark,
     Light,
+    /// Lucid's Material surfaces and green accent, in the desktop's light or
+    /// dark appearance.
+    Lucid,
     #[default]
     System,
+}
+
+/// How the tray icon is drawn on Linux and Windows: in colour, or white or
+/// Where word-level lyric timings may come from. Off keeps the ordinary
+/// line-level lyrics.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WordSyncChoice {
+    #[default]
+    Off,
+    SpicyLyrics,
+}
+
+fn word_sync_is_off(choice: &WordSyncChoice) -> bool {
+    *choice == WordSyncChoice::Off
+}
+
+/// How much of the blurred cover shows through Lucid's floating panels.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LucidGlass {
+    /// Opaque panels, as a plain theme.
+    Off,
+    /// A gentle translucency that keeps cards readable over any cover.
+    Soft,
+    /// Lucid's clearest glass, with the cover colours strongest underneath.
+    #[default]
+    Clear,
+}
+
+/// What Lucid puts behind its floating panels: the blurred cover, or a plain
+/// dark interface with no artwork and no cover colour anywhere.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LucidBackground {
+    /// The page or playing cover, blurred and darkened, under glass panels.
+    #[default]
+    Cover,
+    /// A clean dark interface: no cover art, no wash and no tinted panels.
+    Dark,
+}
+
+/// How fast Spicy Lyrics' letter, line and glow springs run.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SpicyMotion {
+    /// Still lyrics: no springs, the fill still follows the song.
+    Off,
+    Slow,
+    #[default]
+    Normal,
+    Fast,
+}
+
+impl SpicyMotion {
+    /// A multiplier on the animation clock, or zero for still lyrics.
+    pub fn scale(self) -> f32 {
+        match self {
+            Self::Off => 0.0,
+            Self::Slow => 0.55,
+            Self::Normal => 1.0,
+            Self::Fast => 1.7,
+        }
+    }
 }
 
 /// How the tray icon is drawn on Linux and Windows: in colour, or white or
@@ -164,13 +231,15 @@ impl<'de> Deserialize<'de> for LanguageChoice {
 }
 
 impl ThemeChoice {
-    pub const ALL: [ThemeChoice; 3] = [Self::System, Self::Light, Self::Dark];
+    pub const ALL: [ThemeChoice; 4] = [Self::System, Self::Light, Self::Dark, Self::Lucid];
 
     pub fn label(self, locale: crate::i18n::Locale) -> std::borrow::Cow<'static, str> {
         use crate::i18n::{gettext, pgettext};
         match self {
             Self::Dark => pgettext(locale, "theme", "Dark"),
             Self::Light => pgettext(locale, "theme", "Light"),
+            // The theme's name, as its author writes it.
+            Self::Lucid => "Lucid".into(),
             Self::System => gettext(locale, "Follow system"),
         }
     }
@@ -313,6 +382,23 @@ pub struct Settings {
     pub home: HomeSettings,
     /// Tint the interface with the colour of the playing album's art.
     pub accent_from_art: bool,
+    /// How much Lucid's panels let the blurred cover through.
+    pub lucid_glass: LucidGlass,
+    /// The blurred cover or a clean dark interface behind Lucid's panels.
+    pub lucid_background: LucidBackground,
+    /// Let the page or song cover's colour reach Lucid's panels, not only
+    /// the backdrop behind them.
+    pub lucid_cover_tint: bool,
+    /// How fast Spicy Lyrics animates its letters, lines and glow.
+    pub spicy_motion: SpicyMotion,
+    /// Draw Spicy's letter glow around the sung word.
+    pub spicy_glow: bool,
+    /// Show the blurred cover behind the full-screen lyrics.
+    pub spicy_fullscreen_backdrop: bool,
+    /// Show a small live lyrics block in the Now Playing column.
+    pub spicy_now_playing: bool,
+    /// Animate the Now Playing lyrics block's active line.
+    pub spicy_now_playing_motion: bool,
     /// A spectrum or waveform of the playing song behind the player bar.
     pub player_bar_vis: PlayerBarVis,
     /// Allow clicks on the player bar background to cycle visualizer modes.
@@ -441,6 +527,9 @@ pub struct Settings {
     /// MilkDrop rather than the cover's art behind full screen lyrics.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub lyrics_milkdrop: bool,
+    /// The optional source of word-level lyric timings.
+    #[serde(default, skip_serializing_if = "word_sync_is_off")]
+    pub word_sync: WordSyncChoice,
     /// The MilkDrop window's size in logical points, when not full-screen.
     pub milkdrop_size: [f32; 2],
     /// Which proxy to use. Older files without this field stay on `system`.
@@ -508,6 +597,14 @@ impl Default for Settings {
             theme_pair: crate::theme::ThemePair::default(),
             home: HomeSettings::default(),
             accent_from_art: true,
+            lucid_glass: LucidGlass::Clear,
+            lucid_background: LucidBackground::Cover,
+            lucid_cover_tint: true,
+            spicy_motion: SpicyMotion::Normal,
+            spicy_glow: true,
+            spicy_fullscreen_backdrop: true,
+            spicy_now_playing: true,
+            spicy_now_playing_motion: true,
             player_bar_vis: PlayerBarVis::Off,
             player_bar_vis_click: true,
             visualizer_fps: crate::milkdrop::DEFAULT_FPS,
@@ -570,6 +667,7 @@ impl Default for Settings {
             milkdrop_fullscreen: false,
             milkdrop_panel_height: 232,
             lyrics_milkdrop: false,
+            word_sync: WordSyncChoice::Off,
             milkdrop_size: crate::milkdrop::DEFAULT_SIZE,
             proxy_mode: ProxyMode::System,
             proxy: String::new(),
@@ -612,6 +710,9 @@ impl Settings {
     /// one, else Follow system's choice for that appearance. `None` leaves
     /// Spotifast's own Light or Dark.
     pub(crate) fn cached_palette(&self, dark: bool) -> Option<crate::theme::Palette> {
+        if self.theme == ThemeChoice::Lucid {
+            return Some(crate::theme::lucid::palette(dark));
+        }
         if let Some(palette) = self.fixed_palette() {
             return Some(palette);
         }
@@ -1035,6 +1136,57 @@ mod tests {
         assert!(settings.system_theme_cache.is_none());
         assert_eq!(settings.theme, ThemeChoice::Dark);
         assert_eq!(settings.volume, 37);
+    }
+
+    /// Older files gain the Lucid and Spicy Lyrics choices at their defaults,
+    /// and the chosen speeds survive a round trip.
+    #[test]
+    fn appearance_and_lyrics_choices_round_trip() {
+        use super::{LucidBackground, LucidGlass, SpicyMotion};
+        let old: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.lucid_glass, LucidGlass::Clear);
+        assert_eq!(old.lucid_background, LucidBackground::Cover);
+        assert!(old.lucid_cover_tint && old.spicy_glow);
+        assert_eq!(old.spicy_motion, SpicyMotion::Normal);
+        assert!(old.spicy_now_playing && old.spicy_now_playing_motion);
+        assert!(old.spicy_fullscreen_backdrop);
+
+        let saved: Settings = serde_json::from_value(serde_json::json!({
+            "lucid_glass": "off",
+            "lucid_background": "dark",
+            "spicy_motion": "fast",
+            "spicy_now_playing": false
+        }))
+        .unwrap();
+        assert_eq!(saved.lucid_glass, LucidGlass::Off);
+        assert_eq!(saved.lucid_background, LucidBackground::Dark);
+        assert_eq!(saved.spicy_motion, SpicyMotion::Fast);
+        assert!(!saved.spicy_now_playing);
+
+        // Off holds the words still; every other choice runs the springs.
+        assert_eq!(SpicyMotion::Off.scale(), 0.0);
+        assert!(SpicyMotion::Slow.scale() < SpicyMotion::Normal.scale());
+        assert!(SpicyMotion::Fast.scale() > SpicyMotion::Normal.scale());
+    }
+
+    /// Lucid is a built-in choice that keeps following the desktop's
+    /// appearance, with a palette for each.
+    #[test]
+    fn lucid_is_offered_and_follows_the_desktop() {
+        use super::ThemeChoice;
+        assert!(ThemeChoice::ALL.contains(&ThemeChoice::Lucid));
+        let settings: Settings =
+            serde_json::from_value(serde_json::json!({"theme": "lucid"})).unwrap();
+        assert_eq!(settings.theme, ThemeChoice::Lucid);
+        assert!(
+            settings.fixed_palette().is_none(),
+            "Lucid is not one fixed palette"
+        );
+        let dark = settings.cached_palette(true).unwrap();
+        let light = settings.cached_palette(false).unwrap();
+        assert!(dark.dark && !light.dark);
+        assert_eq!(dark, crate::theme::lucid::palette(true));
+        assert_eq!(light, crate::theme::lucid::palette(false));
     }
 
     /// Files from before fastframe-audio was the only output name a
@@ -2074,6 +2226,31 @@ mod session_tests {
 
         let json = serde_json::to_string(&state).unwrap();
         assert_eq!(serde_json::from_str::<SessionState>(&json).unwrap(), state);
+    }
+
+    #[test]
+    fn word_sync_is_off_unless_chosen() {
+        let settings = super::Settings::default();
+        assert_eq!(settings.word_sync, super::WordSyncChoice::Off);
+        assert!(
+            !serde_json::to_string(&settings)
+                .unwrap()
+                .contains("word_sync")
+        );
+        let settings = super::Settings {
+            word_sync: super::WordSyncChoice::SpicyLyrics,
+            ..super::Settings::default()
+        };
+        let json = serde_json::to_string(&settings).unwrap();
+        assert!(json.contains("\"word_sync\":\"spicy_lyrics\""));
+        assert_eq!(
+            serde_json::from_str::<super::Settings>(&json)
+                .unwrap()
+                .word_sync,
+            super::WordSyncChoice::SpicyLyrics
+        );
+        let old: super::Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.word_sync, super::WordSyncChoice::Off);
     }
 
     #[test]

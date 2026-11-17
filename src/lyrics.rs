@@ -34,6 +34,8 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 /// Any longer and the song may have moved on; the error shows instead,
 /// and a click on it asks again.
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(5);
+/// The optional word-level provider must not hold up the ordinary lyrics.
+const WORD_SYNC_TIMEOUT: Duration = Duration::from_secs(7);
 
 /// Track metadata used for lyrics lookup.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -49,6 +51,80 @@ pub struct Line {
     /// When the line starts; `None` in lyrics that carry no timing.
     pub at_ms: Option<u32>,
     pub text: String,
+    /// Word timings, when the source has them: Spotify's `syllables` array or
+    /// an enhanced LRC line. Empty for line-synced words, which are spread
+    /// across the line instead. Older cached answers load as empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub syllables: Vec<Syllable>,
+}
+
+/// One timed word or syllable inside a line, in milliseconds.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Syllable {
+    pub at_ms: u32,
+    /// The source's own end, when it has one. Enhanced LRC does not, so the
+    /// next syllable or the line's end is used instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_ms: Option<u32>,
+    pub text: String,
+    /// Whether this syllable continues the word before it. Provider answers
+    /// use this where their text has no separating space.
+    #[serde(default)]
+    pub continues: bool,
+}
+
+/// One timed syllable inside a word. Its character count lets the letter
+/// animation spend each real syllable's own span, rather than spreading the
+/// whole word evenly across a long hold.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WordPart {
+    pub at_ms: u32,
+    pub end_ms: u32,
+    pub chars: usize,
+}
+
+/// One animation unit of a line: a word, or a syllable of one, that the view
+/// can split into letters when it is held long enough.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Word {
+    pub at_ms: u32,
+    pub end_ms: u32,
+    pub text: String,
+    /// Whether a space separates this unit from the one before it.
+    pub space_before: bool,
+    /// Whether its letters animate one at a time, as Spicy Lyrics splits a
+    /// word held for a second or more.
+    pub letters: bool,
+    /// Real syllable spans inside this word, when the source supplied them.
+    /// Empty means the word's letters share its whole span evenly.
+    pub parts: Vec<WordPart>,
+}
+
+/// The shortest unit Spicy Lyrics splits into letters.
+const LETTER_SPLIT_MS: u32 = 1_000;
+/// Its letters finish this much before the word does, so the last one lands
+/// with the voice rather than after it.
+const LETTER_TRIM_MS: u32 = 250;
+
+/// One credited person or profile on a lyrics answer.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Credit {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+/// Where the words came from, shown with them. The Spicy Lyrics API requires
+/// this attribution; community syncs also name their uploader and maker.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Attribution {
+    pub provider: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uploader: Option<Credit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maker: Option<Credit>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,6 +134,9 @@ pub struct Lyrics {
     pub synced: bool,
     /// The database knows there are no words.
     pub instrumental: bool,
+    /// Present only when a word-level provider supplied the words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attribution: Option<Attribution>,
 }
 
 impl Lyrics {
@@ -72,12 +151,189 @@ impl Lyrics {
             .partition_point(|line| line.at_ms.is_some_and(|at| at <= position_ms));
         started.checked_sub(1)
     }
+
+    /// When the line at `index` stops being sung: the next timed line's
+    /// start, or the track's own length for the last one.
+    pub fn line_end(&self, index: usize, track_duration_ms: u32) -> Option<u32> {
+        let start = self.lines.get(index)?.at_ms?;
+        let next = self
+            .lines
+            .iter()
+            .skip(index + 1)
+            .find_map(|line| line.at_ms)
+            .or(Some(track_duration_ms).filter(|end| *end > start))
+            .unwrap_or(start + 3_000);
+        Some(next.max(start + 400))
+    }
+
+    /// The words of the line at `index`, each with the moment it starts.
+    ///
+    /// Spotify and LRCLIB time whole lines, not words, so a line's words are
+    /// spread across its own time in proportion to how long they are. That is
+    /// what lets a word-synced view follow a line-synced source. Lyrics
+    /// without timing give every word `None`.
+    pub fn words(&self, index: usize, track_duration_ms: u32) -> Vec<(&str, Option<u32>)> {
+        let Some(line) = self.lines.get(index) else {
+            return Vec::new();
+        };
+        let tokens: Vec<&str> = line.text.split_whitespace().collect();
+        let Some(start) = line.at_ms.filter(|_| self.synced) else {
+            return tokens.into_iter().map(|word| (word, None)).collect();
+        };
+        let end = self.line_end(index, track_duration_ms).unwrap_or(start);
+        let span = u64::from(end.saturating_sub(start));
+        let letters: u64 = tokens
+            .iter()
+            .map(|word| word.chars().count().max(1) as u64)
+            .sum();
+        let mut walked = 0;
+        let mut words = Vec::with_capacity(tokens.len());
+        for word in tokens {
+            words.push((word, Some(start + (span * walked / letters.max(1)) as u32)));
+            walked += word.chars().count().max(1) as u64;
+        }
+        words
+    }
+
+    /// The line's animation units.
+    ///
+    /// A source with word or syllable timings keeps them, and only those
+    /// units animate one at a time. A line-synced source has no word times:
+    /// its words carry the line's own span so the view can lay them out and
+    /// sweep the line as a whole, without inventing a time for each word.
+    pub fn units(&self, index: usize, track_duration_ms: u32) -> Vec<Word> {
+        let Some(line) = self.lines.get(index) else {
+            return Vec::new();
+        };
+        let line_end = self.line_end(index, track_duration_ms);
+        let mut units: Vec<Word> = Vec::new();
+        if self.synced && !line.syllables.is_empty() {
+            for (at, syllable) in line.syllables.iter().enumerate() {
+                let text = syllable.text.trim();
+                if text.is_empty() {
+                    continue;
+                }
+                let next = line
+                    .syllables
+                    .iter()
+                    .skip(at + 1)
+                    .find(|next| next.at_ms > syllable.at_ms)
+                    .map(|next| next.at_ms);
+                let end = syllable
+                    .end_ms
+                    .filter(|end| *end > syllable.at_ms)
+                    .or(next)
+                    .or(line_end)
+                    .unwrap_or(syllable.at_ms);
+                let raw = &syllable.text;
+                let space_before = units.is_empty()
+                    || raw.starts_with(char::is_whitespace)
+                    || (at > 0 && line.syllables[at - 1].text.ends_with(char::is_whitespace));
+                let end = end.max(syllable.at_ms);
+                let chars = text.chars().count();
+                if (syllable.continues || !space_before)
+                    && let Some(unit) = units.last_mut()
+                {
+                    // A source can split a word without a leading space.
+                    // Keep it in the same unit, with its own timed span.
+                    unit.text.push_str(text);
+                    unit.end_ms = unit.end_ms.max(end);
+                    unit.parts.push(WordPart {
+                        at_ms: syllable.at_ms,
+                        end_ms: end,
+                        chars,
+                    });
+                    unit.letters = unit.end_ms.saturating_sub(unit.at_ms) >= LETTER_SPLIT_MS;
+                } else {
+                    units.push(Word {
+                        at_ms: syllable.at_ms,
+                        end_ms: end,
+                        text: text.to_string(),
+                        space_before,
+                        letters: end.saturating_sub(syllable.at_ms) >= LETTER_SPLIT_MS,
+                        parts: vec![WordPart {
+                            at_ms: syllable.at_ms,
+                            end_ms: end,
+                            chars,
+                        }],
+                    });
+                }
+            }
+        }
+        if units.is_empty() {
+            let Some(start) = line.at_ms.filter(|_| self.synced) else {
+                return units;
+            };
+            let end = line_end.unwrap_or(start);
+            for text in line.text.split_whitespace() {
+                units.push(Word {
+                    at_ms: start,
+                    end_ms: end,
+                    text: text.to_string(),
+                    space_before: !units.is_empty(),
+                    letters: false,
+                    parts: Vec::new(),
+                });
+            }
+        }
+        units
+    }
+
+    /// `unit`'s letters, each with the instant its own animation starts and
+    /// ends. A unit that is not split gives every letter the unit's own span.
+    pub fn letters(unit: &Word) -> Vec<(char, u32, u32)> {
+        let characters: Vec<char> = unit.text.chars().collect();
+        if characters.is_empty() {
+            return Vec::new();
+        }
+        if !unit.letters || characters.len() < 2 {
+            return characters
+                .into_iter()
+                .map(|character| (character, unit.at_ms, unit.end_ms))
+                .collect();
+        }
+        let span = unit.end_ms.saturating_sub(unit.at_ms);
+        let sung = span.saturating_sub(LETTER_TRIM_MS).max(span / 2);
+        let parts_chars: usize = unit.parts.iter().map(|part| part.chars).sum();
+        if unit.parts.is_empty() || parts_chars != characters.len() {
+            let each = sung / characters.len() as u32;
+            return characters
+                .into_iter()
+                .enumerate()
+                .map(|(index, character)| {
+                    let start = unit.at_ms + each * index as u32;
+                    (character, start, start + each.max(1))
+                })
+                .collect();
+        }
+        let mut timed = Vec::with_capacity(characters.len());
+        let mut index = 0;
+        for part in &unit.parts {
+            let count = part.chars.min(characters.len().saturating_sub(index));
+            if count == 0 {
+                continue;
+            }
+            let part_span = part.end_ms.saturating_sub(part.at_ms);
+            let part_sung = part_span.saturating_sub(LETTER_TRIM_MS).max(part_span / 2);
+            let each = (part_sung / count as u32).max(1);
+            for offset in 0..count {
+                let start = part.at_ms.saturating_add(each * offset as u32);
+                timed.push((characters[index], start, start.saturating_add(each)));
+                index += 1;
+            }
+        }
+        debug_assert_eq!(index, characters.len());
+        timed
+    }
 }
 
 /// Parses Spotify's `color-lyrics` response.
 pub fn from_spotify(json: &serde_json::Value) -> Option<Lyrics> {
     let lyrics = json.get("lyrics")?;
-    let synced = lyrics.get("syncType").and_then(|value| value.as_str()) == Some("LINE_SYNCED");
+    // LINE_SYNCED is the usual value, but word and syllable sync modes use
+    // their own names. Only UNSYNCED means the times are absent.
+    let declared_synced =
+        lyrics.get("syncType").and_then(|value| value.as_str()) != Some("UNSYNCED");
     let lines: Vec<Line> = lyrics
         .get("lines")?
         .as_array()?
@@ -95,22 +351,58 @@ pub fn from_spotify(json: &serde_json::Value) -> Option<Lyrics> {
                         .and_then(|text| text.parse().ok())
                         .or_else(|| value.as_u64().and_then(|n| u32::try_from(n).ok()))
                 })
-                .filter(|_| synced);
+                .filter(|_| declared_synced);
             Some(Line {
                 at_ms,
                 text: text.to_string(),
+                syllables: syllables_from(line),
             })
         })
         .collect();
     if lines.is_empty() {
         return None;
     }
-    let synced = synced && lines.iter().all(|line| line.at_ms.is_some());
+    let synced = declared_synced && lines.iter().all(|line| line.at_ms.is_some());
     Some(Lyrics {
         lines,
         synced,
         instrumental: false,
+        attribution: None,
     })
+}
+
+/// The word timings on one Spotify `color-lyrics` line, if it has any.
+fn syllables_from(line: &serde_json::Value) -> Vec<Syllable> {
+    line.get("syllables")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    // The raw text is kept: the spaces around it are how the
+                    // view knows two syllables are separate words.
+                    let text = item.get("words")?.as_str()?;
+                    if text.trim().is_empty() {
+                        return None;
+                    }
+                    Some(Syllable {
+                        at_ms: json_ms(item.get("startTimeMs")?)?,
+                        end_ms: item.get("endTimeMs").and_then(json_ms),
+                        text: text.to_string(),
+                        continues: false,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A time Spotify sends as a string, and older answers as a number.
+fn json_ms(value: &serde_json::Value) -> Option<u32> {
+    value
+        .as_str()
+        .and_then(|text| text.parse().ok())
+        .or_else(|| value.as_u64().and_then(|ms| u32::try_from(ms).ok()))
 }
 
 /// The cached answer at `path`, while it is fresh.
@@ -140,6 +432,46 @@ pub fn store(path: &Path, found: &Option<Lyrics>) {
 /// negative answer must never turn a failed request into "no lyrics".
 pub fn previously_found(path: &Path) -> Option<Lyrics> {
     read_cache_contents(path).flatten()
+}
+
+/// A word-level provider to try before the line-level services.
+pub struct WordSync<'a> {
+    pub track_id: &'a str,
+    pub key: &'a str,
+}
+
+/// Asks the optional provider for word timings, caching both answers and
+/// misses. A miss falls back to the ordinary line-level lookup.
+pub async fn word_sync(
+    http: &reqwest::Client,
+    cache_dir: &Path,
+    word_sync: WordSync<'_>,
+) -> Option<Lyrics> {
+    // v2: the first parser read IsPartOfWord backwards and cached words with
+    // spaces inside them. Ignore those files rather than showing them again.
+    let path = cache_dir.join(format!("words-v2-{}.json", word_sync.track_id));
+    if let Some(cached) = read_cache(&path)
+        && (cached.is_some() || !older_than(&path, NONE_LIFETIME))
+    {
+        return cached;
+    }
+    let result = tokio::time::timeout(
+        WORD_SYNC_TIMEOUT,
+        crate::word_sync::fetch(http, word_sync.track_id, word_sync.key),
+    )
+    .await;
+    match result {
+        Ok(Ok(Some(found))) => {
+            write_cache(&path, &Some(found.clone()));
+            Some(found)
+        }
+        Ok(Ok(None)) => {
+            write_cache(&path, &None);
+            None
+        }
+        // A refused key or an outage must not be remembered as "no words".
+        Ok(Err(_)) | Err(_) => None,
+    }
 }
 
 /// Fetches lyrics for `query`, using the disk cache when available.
@@ -349,6 +681,7 @@ impl Record {
         if self.instrumental {
             return Some(Lyrics {
                 instrumental: true,
+                attribution: None,
                 ..Lyrics::default()
             });
         }
@@ -359,6 +692,7 @@ impl Record {
                     lines,
                     synced: true,
                     instrumental: false,
+                    attribution: None,
                 });
             }
         }
@@ -369,10 +703,12 @@ impl Record {
                 .map(|line| Line {
                     at_ms: None,
                     text: line.trim_end().to_string(),
+                    ..Line::default()
                 })
                 .collect(),
             synced: false,
             instrumental: false,
+            attribution: None,
         })
     }
 }
@@ -657,6 +993,7 @@ pub fn from_text(text: &str) -> Option<Lyrics> {
             lines: timed,
             synced: true,
             instrumental: false,
+            attribution: None,
         });
     }
     Some(Lyrics {
@@ -666,10 +1003,12 @@ pub fn from_text(text: &str) -> Option<Lyrics> {
             .map(|line| Line {
                 at_ms: None,
                 text: line.trim_end().to_string(),
+                ..Line::default()
             })
             .collect(),
         synced: false,
         instrumental: false,
+        attribution: None,
     })
 }
 
@@ -691,15 +1030,80 @@ pub fn parse_lrc(text: &str) -> Vec<Line> {
             continue;
         }
         let body = rest.trim();
+        let (text, syllables) = word_stamps(body);
         for at_ms in times {
             lines.push(Line {
                 at_ms: Some(at_ms),
-                text: body.to_string(),
+                text: text.clone(),
+                syllables: syllables.clone(),
             });
         }
     }
     lines.sort_by_key(|line| line.at_ms);
     lines
+}
+
+/// Enhanced LRC puts `<mm:ss.xx>` before each word. Returns the text with the
+/// stamps removed and the words they time, or the text alone when it has none.
+fn word_stamps(body: &str) -> (String, Vec<Syllable>) {
+    // Each stamp: when it starts, where its text starts, and where the stamp
+    // itself began (which ends the word before it).
+    let mut stamps: Vec<(u32, usize, usize)> = Vec::new();
+    let mut search = 0;
+    while let Some(offset) = body[search..].find('<') {
+        let at = search + offset;
+        if let Some((at_ms, length)) = angle_stamp(&body[at..]) {
+            stamps.push((at_ms, at, at + length));
+            search = at + length;
+        } else {
+            search = at + 1;
+        }
+    }
+    if stamps.is_empty() {
+        return (body.to_string(), Vec::new());
+    }
+    let mut words = Vec::new();
+    for (index, (at_ms, _, text_start)) in stamps.iter().enumerate() {
+        let to = stamps
+            .get(index + 1)
+            .map(|(_, next_tag, _)| *next_tag)
+            .unwrap_or(body.len());
+        let piece = &body[*text_start..to];
+        if !piece.trim().is_empty() {
+            words.push(Syllable {
+                at_ms: *at_ms,
+                end_ms: None,
+                text: piece.to_string(),
+                continues: false,
+            });
+        }
+    }
+    let text: String = words.iter().map(|word| word.text.as_str()).collect();
+    (text.trim().to_string(), words)
+}
+
+/// An enhanced LRC word stamp at the head of `text`: its milliseconds and its
+/// length.
+fn angle_stamp(text: &str) -> Option<(u32, usize)> {
+    let inner = text.strip_prefix('<')?;
+    let close = inner.find('>')?;
+    let stamp = &inner[..close];
+    let (minutes, seconds) = stamp.split_once(':')?;
+    let (seconds, fraction) = match seconds.find(['.', ':']) {
+        Some(dot) => (&seconds[..dot], Some(&seconds[dot + 1..])),
+        None => (seconds, None),
+    };
+    let minutes: u32 = minutes.parse().ok()?;
+    let seconds: u32 = seconds.parse().ok()?;
+    let fraction_ms = match fraction {
+        Some(digits) if !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) => {
+            let value: u32 = digits.chars().take(3).collect::<String>().parse().ok()?;
+            value * 10u32.pow(3u32.saturating_sub(digits.len().min(3) as u32))
+        }
+        Some(_) => return None,
+        None => 0,
+    };
+    Some((minutes * 60_000 + seconds * 1_000 + fraction_ms, close + 2))
 }
 
 /// A timestamp at the head of `text`: its milliseconds and its length.
@@ -1063,6 +1467,7 @@ mod tests {
             lines: parse_lrc("[00:05]a\n[00:10]b\n[00:15]c"),
             synced: true,
             instrumental: false,
+            attribution: None,
         };
         assert_eq!(lyrics.active_line(0), None);
         assert_eq!(lyrics.active_line(5_000), Some(0));
@@ -1072,8 +1477,209 @@ mod tests {
             lines: vec![Line::default()],
             synced: false,
             instrumental: false,
+            attribution: None,
         };
         assert_eq!(plain.active_line(5_000), None);
+    }
+
+    /// A line-synced source still lights its words one at a time: each word
+    /// gets a moment between its line's start and the next line's.
+    #[test]
+    fn a_line_spreads_its_words_across_its_own_time() {
+        let lyrics = Lyrics {
+            lines: parse_lrc("[00:00.00]one two three\n[00:04.00]four\n[00:06.00]five"),
+            synced: true,
+            instrumental: false,
+            attribution: None,
+        };
+        assert_eq!(lyrics.line_end(0, 10_000), Some(4_000));
+        assert_eq!(lyrics.line_end(2, 12_000), Some(12_000));
+        assert_eq!(lyrics.line_end(2, 0), Some(9_000), "no track length yet");
+        let words = lyrics.words(0, 10_000);
+        assert_eq!(words.len(), 3);
+        assert_eq!(words[0], ("one", Some(0)));
+        assert!((1..4_000).contains(&words[1].1.unwrap()));
+        assert!((1..4_000).contains(&words[2].1.unwrap()));
+        assert!(
+            words.windows(2).all(|pair| pair[0].1 <= pair[1].1),
+            "words keep their order: {words:?}"
+        );
+        let plain = Lyrics {
+            lines: vec![Line {
+                at_ms: None,
+                text: "a b".into(),
+                ..Line::default()
+            }],
+            synced: false,
+            instrumental: false,
+            attribution: None,
+        };
+        assert_eq!(plain.words(0, 1_000), [("a", None), ("b", None)]);
+        assert!(lyrics.words(9, 1_000).is_empty());
+    }
+
+    #[test]
+    fn spotify_syllables_keep_their_own_timings() {
+        let json = serde_json::json!({
+            "lyrics": {
+                "syncType": "LINE_SYNCED",
+                "lines": [{
+                    "startTimeMs": "1000",
+                    "words": "Hello world",
+                    "syllables": [
+                        {"startTimeMs": "1000", "endTimeMs": "2200", "words": "Hello "},
+                        {"startTimeMs": "2200", "endTimeMs": "2600", "words": "world"}
+                    ]
+                }]
+            }
+        });
+        let lyrics = from_spotify(&json).unwrap();
+        assert_eq!(lyrics.lines[0].syllables.len(), 2);
+        let units = lyrics.units(0, 5_000);
+        assert_eq!(units.len(), 2);
+        assert_eq!(units[0].text, "Hello");
+        assert_eq!(units[0].at_ms, 1_000);
+        assert_eq!(units[0].end_ms, 2_200);
+        assert!(units[0].letters, "a held word splits into letters");
+        assert!(units[1].space_before);
+        assert!(!units[1].letters);
+    }
+
+    #[test]
+    fn other_word_sync_types_keep_their_timings() {
+        let json = serde_json::json!({
+            "lyrics": {
+                "syncType": "SYLLABLE_SYNCED",
+                "lines": [{
+                    "startTimeMs": "1000",
+                    "words": "Hello world",
+                    "syllables": [
+                        {"startTimeMs": "1000", "endTimeMs": "1600", "words": "Hello "},
+                        {"startTimeMs": "1600", "endTimeMs": "2200", "words": "world"}
+                    ]
+                }]
+            }
+        });
+        let lyrics = from_spotify(&json).unwrap();
+        assert!(lyrics.synced, "a word-sync type is still synced");
+        assert_eq!(lyrics.units(0, 4_000).len(), 2);
+    }
+
+    #[test]
+    fn enhanced_lrc_keeps_word_timings() {
+        let lines = parse_lrc("[00:01.00]<00:01.00>Hello <00:01.60>world");
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "Hello world");
+        assert_eq!(lines[0].syllables.len(), 2);
+        assert_eq!(lines[0].syllables[0].at_ms, 1_000);
+        assert_eq!(lines[0].syllables[1].at_ms, 1_600);
+        let lyrics = Lyrics {
+            lines,
+            synced: true,
+            instrumental: false,
+            attribution: None,
+        };
+        let units = lyrics.units(0, 4_000);
+        assert_eq!(units.len(), 2);
+        assert_eq!(units[0].end_ms, 1_600, "the next stamp ends the word");
+        assert!(units[1].space_before);
+    }
+
+    #[test]
+    fn letters_get_an_equal_share_that_ends_with_the_voice() {
+        let word = Word {
+            at_ms: 0,
+            end_ms: 2_000,
+            text: "Hello".into(),
+            space_before: true,
+            letters: true,
+            parts: Vec::new(),
+        };
+        let letters = Lyrics::letters(&word);
+        assert_eq!(letters.len(), 5);
+        assert_eq!(letters[0], ('H', 0, 350));
+        assert_eq!(letters[4], ('o', 1_400, 1_750));
+        assert!(letters[4].2 <= 2_000 - LETTER_TRIM_MS);
+        let unsplit = Word {
+            letters: false,
+            ..word
+        };
+        assert!(
+            Lyrics::letters(&unsplit)
+                .iter()
+                .all(|(_, at, end)| *at == 0 && *end == 2_000)
+        );
+    }
+
+    #[test]
+    fn syllable_parts_pace_the_letters_inside_their_own_spans() {
+        let word = Word {
+            at_ms: 1_000,
+            end_ms: 2_000,
+            text: "Hello".into(),
+            space_before: false,
+            letters: true,
+            parts: vec![
+                WordPart {
+                    at_ms: 1_000,
+                    end_ms: 1_800,
+                    chars: 3,
+                },
+                WordPart {
+                    at_ms: 1_800,
+                    end_ms: 2_000,
+                    chars: 2,
+                },
+            ],
+        };
+        let letters = Lyrics::letters(&word);
+        assert_eq!(letters.len(), 5);
+        assert_eq!(letters[0].1, 1_000);
+        assert!(letters[2].1 < 1_800, "the first syllable owns its letters");
+        assert_eq!(
+            letters[3].1, 1_800,
+            "the second syllable starts its own span"
+        );
+        assert_eq!(
+            letters[4].2, 1_900,
+            "the final letter is trimmed to the voice"
+        );
+    }
+
+    #[test]
+    fn a_line_synced_source_keeps_one_span_for_its_words() {
+        let lyrics = Lyrics {
+            lines: parse_lrc("[00:00.00]one two\n[00:06.00]three"),
+            synced: true,
+            instrumental: false,
+            attribution: None,
+        };
+        let units = lyrics.units(0, 10_000);
+        assert_eq!(units.len(), 2);
+        assert!(
+            units
+                .iter()
+                .all(|unit| unit.at_ms == 0 && unit.end_ms == 6_000),
+            "the words share the line's own span"
+        );
+        assert!(
+            units.iter().all(|unit| !unit.letters),
+            "no invented letter timings"
+        );
+        assert!(!units[0].space_before);
+        assert!(units[1].space_before);
+    }
+
+    #[test]
+    fn old_cached_lyrics_load_without_word_timings() {
+        let cached: Lyrics = serde_json::from_str(
+            r#"{"lines":[{"at_ms":0,"text":"a line"}],"synced":true,"instrumental":false}"#,
+        )
+        .unwrap();
+        assert!(cached.lines[0].syllables.is_empty());
+        let units = cached.units(0, 2_000);
+        assert_eq!(units.len(), 2);
+        assert!(units.iter().all(|unit| !unit.letters));
     }
 
     #[test]

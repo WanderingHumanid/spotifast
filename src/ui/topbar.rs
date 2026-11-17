@@ -29,6 +29,8 @@ const UPDATE_BADGE_PADDING: f32 = 32.0;
 /// least it shrinks to before the badges give up their labels instead.
 const SEARCH_IDEAL: f32 = 200.0;
 const SEARCH_MAX: f32 = 440.0;
+/// Lucid's search pill spans the middle of its one full-width bar.
+const LUCID_SEARCH: f32 = 640.0;
 const SEARCH_FLOOR: f32 = 130.0;
 // After the badges collapse, a right panel can leave less than 130 points.
 // Keep the original 80-point minimum inside the page's own toolbar.
@@ -280,6 +282,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             {
                 app.actions.push(Action::Forward);
             }
+            if super::lucid::enabled(app)
+                && app.settings.sidebar_visible
+                && nav_button(ui, &palette, Icon::House, true, &gettext(locale, "Home")).clicked()
+            {
+                app.actions.push(Action::Open(Page::Home));
+            }
             ui.add_space(8.0);
 
             // The badges sit at the right end but grow with their text, so
@@ -351,7 +359,30 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             let lead = width - ui.available_width() + window_controls.topbar_width;
             ui.ctx().data_mut(|data| data.insert_temp(lead_id(), lead));
             let fit = topbar_fit(search_room, controls, badges(true), badges(false));
-            let search_width = fit.search;
+            let lucid = super::lucid::enabled(app);
+            // Reserve the right-hand controls and the device badge before
+            // growing the Lucid pill. It takes all that is left rather than
+            // running underneath them.
+            let right_room = (width - controls - badges(true) - 20.0).max(0.0);
+            let search_width = if lucid {
+                LUCID_SEARCH
+                    .max(fit.search)
+                    .min((search_room - controls - badges(true) - 24.0).max(SEARCH_MIN))
+            } else {
+                fit.search
+            };
+            if lucid {
+                // Spotify centres the one search pill in its full-width bar.
+                // When the right-hand controls leave no room for that, it
+                // sits after the navigation instead of covering them.
+                let cursor = ui.cursor().min.x;
+                let target = ((width - search_width) / 2.0)
+                    .min(right_room - search_width)
+                    .max(cursor);
+                if target > cursor {
+                    ui.add_space(target - cursor);
+                }
+            }
             let id = egui::Id::new("global-search");
             let before = app.search.query.clone();
             let selected = egui::TextEdit::load_state(ui.ctx(), id)

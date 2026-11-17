@@ -541,6 +541,8 @@ fn permute<T>(entries: &mut [T], order: &[usize]) {
 
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
+    let lucid = super::lucid::enabled(app);
+    let compact = lucid && app.settings.sidebar_width <= 160.0;
     let expanded_art = has_expanded_art(app);
     let floating_art = app.settings.sidebar_grid && expanded_art;
     // The traffic lights float over the top-left of the sidebar now, so the
@@ -548,30 +550,50 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let top = 12
         + theme::titlebar_inset(ui.ctx()) as i8
         + super::linux_left_controls_inset(ui.ctx()) as i8;
-    let beside = if app.show_queue_panel || app.show_lyrics_panel || app.show_friends_panel {
+    let beside = if app.show_queue_panel
+        || app.show_lyrics_panel
+        || app.show_friends_panel
+        || app.show_now_playing_panel
+        || app.spicy_lyrics
+    {
         theme::SIDE_PANEL_MIN_WIDTH
     } else {
         0.0
     };
+    let least = if lucid {
+        super::lucid::RAIL_WIDTH
+    } else {
+        super::SIDEBAR_MIN_WIDTH
+    };
     let fit = super::yielding_panel(
         ui.ctx(),
         "sidebar",
-        super::SIDEBAR_MIN_WIDTH..=600.0,
+        least..=600.0,
         app.settings.sidebar_width,
         ui.available_width() - super::topbar::least_width(ui.ctx()) - beside,
     );
+    let margin = Margin {
+        left: 12,
+        right: 8,
+        top,
+        bottom: if expanded_art { 0 } else { 8 },
+    };
+    let frame = if lucid {
+        super::lucid::library_frame(app).inner_margin(margin)
+    } else {
+        Frame::new().fill(palette.panel).inner_margin(margin)
+    };
     let panel = egui::Panel::left("sidebar")
         .resizable(true)
         .default_size(app.settings.sidebar_width)
         .size_range(fit.range.clone())
         .show_separator_line(false)
-        .frame(Frame::new().fill(palette.panel).inner_margin(Margin {
-            left: 12,
-            right: 8,
-            top,
-            bottom: if expanded_art { 0 } else { 8 },
-        }));
+        .frame(frame);
     let response = panel.show(ui, |ui| {
+        if compact {
+            rail_contents(app, ui);
+            return;
+        }
         let art_rect = expanded_art.then(|| expanded_art_rect(ui));
         if let Some(rect) = art_rect.filter(|_| !floating_art) {
             reserve_expanded_art(ui, rect);
@@ -590,6 +612,99 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     {
         app.settings.sidebar_width = width;
         app.actions.push(Action::SettingsChanged);
+    }
+}
+
+/// Lucid's library rail: navigation, the library controls and the account's
+/// playlists as covers, with no text column. Widening the panel past the rail
+/// breakpoint brings the ordinary library back.
+fn rail_contents(app: &mut App, ui: &mut egui::Ui) {
+    let palette = app.palette;
+    let locale = app.locale;
+    // The rail can dock the playing art too, rather than accepting the
+    // expand click and drawing nothing. Reserve its square before the
+    // library list so the covers scroll above it.
+    let art_rect = has_expanded_art(app).then(|| expanded_art_rect(ui));
+    if let Some(rect) = art_rect {
+        reserve_expanded_art(ui, rect);
+    }
+    ui.add_space(4.0);
+    let (head_rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), Sense::hover());
+    let mut head = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(head_rect)
+            .layout(Layout::left_to_right(Align::Center)),
+    );
+    theme::icon(&mut head, Icon::Library, 21.0, palette.secondary);
+    head.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        if theme::icon_button(
+            ui,
+            Icon::Plus,
+            16.0,
+            palette.secondary,
+            palette.text,
+            &gettext(locale, "Create a playlist"),
+        )
+        .clicked()
+        {
+            app.actions.push(Action::ShowDialog(Dialog::CreatePlaylist {
+                name: String::new(),
+                public: false,
+                add_uris: Vec::new(),
+            }));
+        }
+    });
+    ui.add_space(6.0);
+    let mut entries = Vec::new();
+    playlist_rows(app, LibrarySort::Spotify, "", &mut entries);
+    egui::ScrollArea::vertical()
+        .id_salt("lucid-library-rail")
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            for entry in entries.iter().filter(|entry| entry.folder.is_none()) {
+                let current = app.page() == &entry.page;
+                let (rect, response) =
+                    ui.allocate_exact_size(vec2(ui.available_width(), 68.0), Sense::click());
+                let side = 64.0;
+                let cover = Rect::from_min_size(
+                    pos2(rect.left(), rect.center().y - side / 2.0),
+                    Vec2::splat(side),
+                );
+                if response.hovered() {
+                    ui.painter()
+                        .rect_filled(cover.expand(3.0), 7.0, palette.surface_hover);
+                }
+                if entry.liked {
+                    liked_cover(ui, cover, 5.0);
+                } else {
+                    super::widgets::paint_cover(
+                        ui,
+                        &palette,
+                        entry.image.as_deref(),
+                        cover,
+                        5.0,
+                        Icon::Music,
+                        Some(app.backend.art()),
+                    );
+                }
+                if current {
+                    ui.painter().rect_stroke(
+                        cover.expand(1.0),
+                        6.0,
+                        egui::Stroke::new(1.5, palette.accent),
+                        egui::StrokeKind::Outside,
+                    );
+                }
+                if response.clicked() {
+                    app.actions.push(Action::Open(entry.page.clone()));
+                }
+                response.on_hover_text(format!("{}\n{}", entry.name, entry.subtitle));
+            }
+        });
+    if let Some(rect) = art_rect {
+        paint_expanded_art(app, ui, rect);
     }
 }
 

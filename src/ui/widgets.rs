@@ -12,11 +12,94 @@ use crate::model::{Action, Dialog, DragEntry, DragTrack, Page, RowContext, RowPi
 use crate::theme::{self, Icon, Palette};
 use crate::util;
 
-pub const CARD_WIDTH: f32 = 172.0;
-/// The cover inside a card, within its 12 point padding.
-pub const CARD_ART: f32 = CARD_WIDTH - 24.0;
-pub const CARD_GAP: f32 = 14.0;
+pub const CARD_WIDTH: f32 = 232.0;
+/// The cover inside a card, within its 20 point padding.
+pub const CARD_ART: f32 = CARD_WIDTH - 40.0;
+pub const CARD_GAP: f32 = 8.0;
 pub const PAGE_PADDING: f32 = 24.0;
+
+/// Names where the words came from, at the end of the scroll. The Spicy
+/// Lyrics API requires this notice, so it is part of both lyrics views.
+pub fn lyrics_attribution(
+    app: &mut App,
+    ui: &mut Ui,
+    attribution: &crate::lyrics::Attribution,
+    size: f32,
+    palette: &Palette,
+) {
+    ui.add_space(18.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        let font = theme::regular(size);
+        ui.label(
+            egui::RichText::new(gettext(app.locale, "Lyrics from"))
+                .font(font.clone())
+                .color(palette.secondary),
+        );
+        credit_link(
+            app,
+            ui,
+            &attribution.provider,
+            attribution.provider_url.as_deref(),
+            font.clone(),
+            palette,
+        );
+        if let Some(uploader) = &attribution.uploader {
+            ui.label(
+                egui::RichText::new(gettext(app.locale, "Uploaded by"))
+                    .font(font.clone())
+                    .color(palette.secondary),
+            );
+            credit_link(
+                app,
+                ui,
+                &uploader.name,
+                uploader.url.as_deref(),
+                font.clone(),
+                palette,
+            );
+        }
+        if let Some(maker) = &attribution.maker {
+            ui.label(
+                egui::RichText::new(gettext(app.locale, "Made by"))
+                    .font(font.clone())
+                    .color(palette.secondary),
+            );
+            credit_link(app, ui, &maker.name, maker.url.as_deref(), font, palette);
+        }
+    });
+}
+
+fn credit_link(
+    app: &mut App,
+    ui: &mut Ui,
+    name: &str,
+    url: Option<&str>,
+    font: egui::FontId,
+    palette: &Palette,
+) {
+    let color = if url.is_some() {
+        palette.accent
+    } else {
+        palette.secondary
+    };
+    let response = ui.add(
+        egui::Label::new(egui::RichText::new(name).font(font).color(color)).sense(
+            if url.is_some() {
+                Sense::click()
+            } else {
+                Sense::hover()
+            },
+        ),
+    );
+    if let Some(url) = url
+        && response
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .clicked()
+    {
+        app.actions.push(Action::OpenUrl(url.to_string()));
+    }
+}
 
 /// Draws an image (or a placeholder) in a square.
 pub fn cover(
@@ -83,7 +166,7 @@ pub(super) fn paint_cover_with_thumbnail(
     // A copy at this size, or while it is made, the nearest copy of the
     // same artwork already on the GPU.
     let loaded = sources.requested.is_some_and(|url| {
-        paint_cover_url(ui, at(url), art, false) || paint_nearest_copy(ui, at(url), art)
+        paint_cover_url(ui, at(url), art, false, 1.0) || paint_nearest_copy(ui, at(url), art)
     }) || sources
         .previous
         .is_some_and(|url| paint_ready_cover_url(ui, at(url), art))
@@ -94,12 +177,13 @@ pub(super) fn paint_cover_with_thumbnail(
                 rect,
                 corner,
                 sources.align_thumbnail,
+                1.0,
             );
             true
         })
         || sources
             .thumbnail
-            .is_some_and(|url| paint_cover_url(ui, at(url), art, sources.align_thumbnail));
+            .is_some_and(|url| paint_cover_url(ui, at(url), art, sources.align_thumbnail, 1.0));
     if !loaded {
         let painter = ui.painter();
         let fill = if palette.dark {
@@ -132,7 +216,7 @@ fn paint_ready_cover_url(
     cover: CoverAt<'_>,
     art: Option<&crate::images::ArtLoader>,
 ) -> bool {
-    art.is_some_and(|art| art.is_ready(cover.url)) && paint_cover_url(ui, cover, art, false)
+    art.is_some_and(|art| art.is_ready(cover.url)) && paint_cover_url(ui, cover, art, false, 1.0)
         || paint_nearest_copy(ui, cover, art)
 }
 
@@ -163,7 +247,7 @@ fn paint_nearest_copy(ui: &Ui, cover: CoverAt<'_>, art: Option<&crate::images::A
     art.touch(cover.url);
     let [width, height] = [texture.size.x, texture.size.y].map(|side| side.round() as usize);
     art.note_texture(cover.url, &uri, width, height);
-    paint_cover_texture(ui, texture, cover.rect, cover.corner, false);
+    paint_cover_texture(ui, texture, cover.rect, cover.corner, false, 1.0);
     true
 }
 
@@ -179,6 +263,18 @@ struct ShownCover {
     url: std::sync::Arc<str>,
     seen: f64,
 }
+
+/// A change of playing cover. The previous picture is painted under the new
+/// one while it fades in, so a song change is a dissolve rather than a cut.
+#[derive(Clone)]
+struct PlayingFade {
+    url: std::sync::Arc<str>,
+    from: Option<std::sync::Arc<str>>,
+    started: f64,
+}
+
+/// How long the new playing cover takes to replace the last one.
+const PLAYING_COVER_FADE: f64 = 0.24;
 
 /// The cover that stands in for `url`'s while it loads: the last one shown,
 /// if it was another song's and it was the one asked for a moment ago.
@@ -208,6 +304,54 @@ pub fn playing_cover(
     let id = egui::Id::new(("playing-cover", key));
     let now = ui.input(|input| input.time);
     let shown = ui.ctx().data(|data| data.get_temp::<ShownCover>(id));
+    let mut fade = ui.ctx().data(|data| data.get_temp::<PlayingFade>(id));
+    if let Some(url) = url
+        && fade.as_ref().is_none_or(|fade| *fade.url != *url)
+    {
+        let from = shown
+            .as_ref()
+            .map(|shown| std::sync::Arc::clone(&shown.url))
+            .filter(|from| **from != *url)
+            .or_else(|| fade.as_ref().and_then(|fade| fade.from.clone()));
+        fade = Some(PlayingFade {
+            url: std::sync::Arc::from(url),
+            from,
+            started: now,
+        });
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(id, fade.clone().unwrap()));
+    }
+    let alpha = fade
+        .as_ref()
+        .filter(|fade| url.is_some_and(|url| *fade.url == *url))
+        .map_or(1.0, |fade| {
+            ((now - fade.started) / PLAYING_COVER_FADE).clamp(0.0, 1.0) as f32
+        });
+    let corner = CornerRadius::same(radius.min(127.0) as u8);
+    let at = |url| CoverAt { url, rect, corner };
+    if alpha < 1.0
+        && let (Some(from), Some(url)) = (fade.as_ref().and_then(|fade| fade.from.clone()), url)
+    {
+        // Keep the old picture whole underneath, then bring the new one up
+        // over it. If either texture is not ready yet the ordinary path
+        // below holds the old cover until it is.
+        let old = paint_cover_url(ui, at(&from), Some(art), false, 1.0);
+        let painted = paint_cover_url(ui, at(url), Some(art), false, alpha);
+        if old && painted {
+            if art.has_copy(url) {
+                ui.ctx().data_mut(|data| {
+                    data.insert_temp(
+                        id,
+                        ShownCover {
+                            url: std::sync::Arc::from(url),
+                            seen: now,
+                        },
+                    );
+                });
+            }
+            return;
+        }
+    }
     let previous = stand_in(shown.as_ref(), url, now);
     paint_cover_with_thumbnail(
         ui,
@@ -243,6 +387,7 @@ fn paint_cover_url(
     cover: CoverAt<'_>,
     art: Option<&crate::images::ArtLoader>,
     shift_thumbnail: bool,
+    opacity: f32,
 ) -> bool {
     let CoverAt { url, rect, corner } = cover;
     if let Some(art) = art {
@@ -276,7 +421,7 @@ fn paint_cover_url(
         // as soon as egui holds the texture.
         None => crate::images::forget_decoded(ui.ctx(), uri),
     }
-    paint_cover_texture(ui, texture, rect, corner, shift_thumbnail);
+    paint_cover_texture(ui, texture, rect, corner, shift_thumbnail, opacity);
     true
 }
 
@@ -286,6 +431,7 @@ fn paint_cover_texture(
     rect: Rect,
     corner: CornerRadius,
     shift_thumbnail: bool,
+    opacity: f32,
 ) {
     let image_aspect = texture.size.x / texture.size.y;
     let rect_aspect = rect.width() / rect.height();
@@ -307,6 +453,9 @@ fn paint_cover_texture(
     egui::Image::new(texture)
         .uv(uv)
         .corner_radius(corner)
+        .tint(Color32::from_white_alpha(
+            (opacity.clamp(0.0, 1.0) * 255.0).round() as u8,
+        ))
         .paint_at(ui, rect);
 }
 
@@ -2854,13 +3003,13 @@ impl CardCover {
 
 /// Fixed height of a [`card`] row for virtualised grids.
 pub fn card_row_height(ui: &mut Ui) -> f32 {
-    const PAD: f32 = 12.0;
+    const PAD: f32 = 20.0;
     const TITLE_GAP: f32 = 10.0;
     const SUBTITLE_GAP: f32 = 2.0;
     const BOTTOM_PAD: f32 = 8.0;
     let image_size = CARD_ART;
-    let title_font = theme::semibold(14.0);
-    let subtitle_font = theme::regular(12.5);
+    let title_font = theme::semibold(18.0);
+    let subtitle_font = theme::regular(15.0);
     let (title_row, subtitle_row) = ui.fonts_mut(|fonts| {
         (
             fonts.row_height(&title_font),
@@ -2885,14 +3034,14 @@ pub fn card(
         playing,
     } = cover;
     let palette = app.palette;
-    const PAD: f32 = 12.0;
+    const PAD: f32 = 20.0;
     const TITLE_GAP: f32 = 10.0;
     const SUBTITLE_GAP: f32 = 2.0;
     const BOTTOM_PAD: f32 = 8.0;
     let image_size = CARD_ART;
     let text_width = image_size;
-    let title_font = theme::semibold(14.0);
-    let subtitle_font = theme::regular(12.5);
+    let title_font = theme::semibold(18.0);
+    let subtitle_font = theme::regular(15.0);
     // Every card reserves the title row and two subtitle rows, whatever its
     // own subtitle needs: a two-line subtitle then sits inside the hover
     // background, and a shelf that mixes one- and two-line subtitles keeps
@@ -3039,7 +3188,9 @@ fn shelf_cards(ui: &mut Ui, id: &str, add_contents: impl FnOnce(&mut Ui)) {
     ui.add_space(4.0);
     crate::autoscroll::show(
         ui,
-        egui::ScrollArea::horizontal().id_salt(id),
+        egui::ScrollArea::horizontal()
+            .id_salt(id)
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden),
         egui::Vec2b::new(true, false),
         |ui| {
             ui.horizontal(|ui| {
@@ -3114,8 +3265,7 @@ pub fn skeleton_rows(ui: &mut Ui, palette: &Palette, locale: Locale, count: usiz
 /// Placeholder cards for a shelf that is loading, the size of the cards it
 /// will show, round for artists. Like [`skeleton_rows`], they do not move.
 pub fn skeleton_cards(ui: &mut Ui, palette: &Palette, locale: Locale, count: usize, round: bool) {
-    const PAD: f32 = 12.0;
-    let height = PAD + CARD_ART + 10.0 + 14.0 + 6.0 + 10.0 + PAD;
+    let height = card_row_height(ui);
     skeleton_cards_sized(ui, palette, locale, count, round, height);
 }
 
@@ -3150,7 +3300,7 @@ fn skeleton_cards_sized(
     height: f32,
 ) {
     let fill = skeleton_fill(palette);
-    const PAD: f32 = 12.0;
+    const PAD: f32 = 20.0;
     for index in 0..count {
         let (rect, response) = ui.allocate_exact_size(vec2(CARD_WIDTH, height), Sense::hover());
         if index == 0 {
@@ -3947,6 +4097,102 @@ mod playing_cover_tests {
     /// The last song's cover stands in for the next one's only right after
     /// the change: not for a song without art, not after a gap, and not for
     /// good when the new cover cannot be had.
+    fn image_alphas(shape: &egui::epaint::Shape, out: &mut Vec<u8>) {
+        match shape {
+            egui::epaint::Shape::Mesh(mesh) if mesh.texture_id != egui::TextureId::default() => {
+                out.extend(mesh.vertices.iter().map(|vertex| vertex.color.a()));
+            }
+            egui::epaint::Shape::Rect(rect) if rect.brush.is_some() => {
+                out.push(rect.fill.a());
+            }
+            egui::epaint::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    image_alphas(shape, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// A song change paints the last cover under the new one and fades the
+    /// new one in, rather than cutting between them.
+    #[test]
+    fn a_song_change_fades_the_new_cover_in() {
+        let ctx = egui::Context::default();
+        egui_extras::install_image_loaders(&ctx);
+        let png = |rgb: [u8; 3]| {
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            image::RgbImage::from_pixel(64, 64, image::Rgb(rgb))
+                .write_to(&mut bytes, image::ImageFormat::Png)
+                .unwrap();
+            bytes.into_inner()
+        };
+        let [first, next] = ["bytes://crossfade-first.png", "bytes://crossfade-next.png"];
+        ctx.include_bytes(first, png([200, 40, 40]));
+        ctx.include_bytes(next, png([40, 80, 200]));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let dir =
+            std::env::temp_dir().join(format!("spotifast-crossfade-test-{}", std::process::id()));
+        let art = crate::images::ArtLoader::new(
+            reqwest::Client::new(),
+            runtime.handle().clone(),
+            dir.clone(),
+        );
+        let palette = Palette::dark();
+        let rect = Rect::from_min_size(egui::pos2(0.0, 0.0), Vec2::splat(64.0));
+        let frame = |time: f64, url: &str| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(128.0, 128.0))),
+                    time: Some(time),
+                    ..Default::default()
+                },
+                |ui| {
+                    playing_cover(ui, &palette, &art, "crossfade", Some(url), rect, 4.0);
+                },
+            );
+            output.textures_delta.clear();
+            let mut alphas = Vec::new();
+            for shape in &output.shapes {
+                image_alphas(&shape.shape, &mut alphas);
+            }
+            alphas
+        };
+        let started = std::time::Instant::now();
+        loop {
+            frame(0.0, first);
+            let allocated = ctx
+                .tex_manager()
+                .read()
+                .allocated()
+                .any(|(_, meta)| meta.name == first);
+            if allocated {
+                break;
+            }
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(5),
+                "the first cover texture was never made"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        // One more frame paints the now-ready texture and records it as the
+        // cover that can stand in for the next song.
+        frame(0.0, first);
+        let mut partial = false;
+        for step in 0..40 {
+            let alphas = frame(1.0 + 0.01 * f64::from(step), next);
+            partial |= alphas.iter().any(|alpha| *alpha > 0 && *alpha < 255);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(partial, "the new cover is drawn part way through its fade");
+        let end = frame(2.0, next);
+        assert!(end.contains(&255), "the new cover finishes fully opaque");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn the_last_songs_cover_stands_in_only_for_a_moment() {
         let shown = ShownCover {

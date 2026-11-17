@@ -65,8 +65,14 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
                 rect
             };
             fastframe_titlebar::drag(ui, drag_rect);
-            let top = super::blend(palette.window, palette.accent, 0.10);
-            super::widgets::paint_vertical_gradient(ui, rect, top, palette.window);
+            // Lucid's start screen wears the theme's own backdrop and glass
+            // card, so signing in looks like the app that follows.
+            if super::lucid::enabled(app) {
+                super::lucid::backdrop(app, ui);
+            } else {
+                let top = super::blend(palette.window, palette.accent, 0.10);
+                super::widgets::paint_vertical_gradient(ui, rect, top, palette.window);
+            }
             let waiting = connecting || matches!(app.auth, AuthStatus::WaitingForBrowser { .. });
             let steps = !waiting && show_steps(app, &ctx);
             // Two columns share what the window has beside the card's
@@ -103,17 +109,22 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
                     .max_rect(card)
                     .layout(Layout::top_down(Align::Center)),
             );
-            Frame::new()
-                .fill(palette.panel)
-                .stroke(Stroke::new(1.0, palette.outline))
-                .corner_radius(CornerRadius::same(theme::RADIUS + 8))
+            let card_frame = if super::lucid::enabled(app) {
+                super::lucid::card(app, super::lucid::RADIUS + 8)
+            } else {
+                Frame::new()
+                    .fill(palette.panel)
+                    .stroke(Stroke::new(1.0, palette.outline))
+                    .corner_radius(CornerRadius::same(theme::RADIUS + 8))
+                    .shadow(egui::epaint::Shadow {
+                        offset: [0, 16],
+                        blur: 48,
+                        spread: 0,
+                        color: palette.shadow,
+                    })
+            };
+            card_frame
                 .inner_margin(Margin::same(36))
-                .shadow(egui::epaint::Shadow {
-                    offset: [0, 16],
-                    blur: 48,
-                    spread: 0,
-                    color: palette.shadow,
-                })
                 .show(&mut card_ui, |ui| {
                     let scroll = egui::ScrollArea::vertical()
                         .id_salt("login-card-scroll")
@@ -147,18 +158,38 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
                         ui.ctx().request_repaint();
                     }
                 });
-            ui.painter().text(
-                pos2(rect.center().x, rect.bottom() - 24.0),
-                egui::Align2::CENTER_BOTTOM,
-                // Translators: {version} is the app's version number, such as 1.2.0.
-                gettext(
-                    app.locale,
-                    "Spotifast {version} • not affiliated with Spotify",
-                )
-                .replace("{version}", env!("CARGO_PKG_VERSION")),
-                theme::regular(11.5),
-                palette.dim,
-            );
+            // Translators: {version} is the app's version number, such as 1.2.0.
+            let footer = gettext(
+                app.locale,
+                "Spotifast {version} • not affiliated with Spotify",
+            )
+            .replace("{version}", env!("CARGO_PKG_VERSION"));
+            let font = theme::regular(11.5);
+            if super::lucid::enabled(app) {
+                // The line sits on the artwork, not on the card, so Lucid
+                // gives it a glass chip of its own to stay readable in both
+                // appearances.
+                let galley = ui.painter().layout_no_wrap(footer, font, palette.secondary);
+                let at = pos2(
+                    rect.center().x - galley.size().x / 2.0,
+                    rect.bottom() - 24.0 - galley.size().y,
+                );
+                let painter = ui.painter();
+                painter.rect_filled(
+                    Rect::from_min_size(at, galley.size()).expand2(Vec2::new(8.0, 4.0)),
+                    8.0,
+                    super::lucid::glass(app, palette.panel),
+                );
+                painter.galley(at, galley, palette.secondary);
+            } else {
+                ui.painter().text(
+                    pos2(rect.center().x, rect.bottom() - 24.0),
+                    egui::Align2::CENTER_BOTTOM,
+                    footer,
+                    font,
+                    palette.dim,
+                );
+            }
         });
 }
 

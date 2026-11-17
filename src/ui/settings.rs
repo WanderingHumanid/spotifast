@@ -6,7 +6,7 @@ use crate::api::models::pick_image;
 use crate::app::App;
 use crate::i18n::{gettext, ngettext, pgettext};
 use crate::model::{Action, Dialog};
-use crate::settings::{LanguageChoice, ProxyMode, ThemeChoice};
+use crate::settings::{LanguageChoice, ProxyMode, ThemeChoice, WordSyncChoice};
 use crate::theme::{self, Icon, Palette};
 use crate::winamp::SkinKind;
 
@@ -354,9 +354,48 @@ fn skin_part(
     ui.add_space(14.0);
 }
 
+/// How a settings section is drawn. Lucid floats its sections as glass cards
+/// over the page backdrop; every other theme keeps the opaque panel.
+#[derive(Clone, Copy)]
+struct SectionSkin {
+    fill: egui::Color32,
+    stroke: Stroke,
+    shadow: egui::epaint::Shadow,
+    radius: u8,
+}
+
+impl SectionSkin {
+    fn for_app(app: &App) -> Self {
+        if super::lucid::enabled(app) {
+            let base = if app.palette.dark {
+                app.palette.surface
+            } else {
+                app.palette.panel
+            };
+            Self {
+                fill: super::lucid::glass(app, base),
+                stroke: super::lucid::border(app),
+                shadow: super::lucid::shadow(app),
+                radius: super::lucid::RADIUS,
+            }
+        } else {
+            let palette = app.palette;
+            Self {
+                fill: palette
+                    .surface
+                    .gamma_multiply(if palette.dark { 0.7 } else { 1.0 }),
+                stroke: Stroke::new(1.0, palette.outline),
+                shadow: egui::epaint::Shadow::NONE,
+                radius: theme::RADIUS + 2,
+            }
+        }
+    }
+}
+
 fn section(
     ui: &mut egui::Ui,
     palette: &Palette,
+    skin: &SectionSkin,
     title: &str,
     add_contents: impl FnOnce(&mut egui::Ui),
 ) {
@@ -364,13 +403,10 @@ fn section(
     theme::text(ui, title, theme::bold(18.0), palette.text);
     ui.add_space(8.0);
     Frame::new()
-        .fill(
-            palette
-                .surface
-                .gamma_multiply(if palette.dark { 0.7 } else { 1.0 }),
-        )
-        .stroke(Stroke::new(1.0, palette.outline))
-        .corner_radius(CornerRadius::same(theme::RADIUS + 2))
+        .fill(skin.fill)
+        .stroke(skin.stroke)
+        .shadow(skin.shadow)
+        .corner_radius(CornerRadius::same(skin.radius))
         // Every row leaves 10 points below itself for the next one, so the
         // bottom margin is that much less than the top one (#1037).
         .inner_margin(Margin {
@@ -461,6 +497,7 @@ pub(super) fn spotify_access_control(app: &mut App, ui: &mut egui::Ui) {
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let locale = app.locale;
+    let skin = SectionSkin::for_app(app);
     ui.add_space(8.0);
     theme::text(
         ui,
@@ -513,7 +550,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         } else {
             needle.as_str()
         };
-        section(ui, &palette, &soloist, |ui| {
+        section(ui, &palette, &skin, &soloist, |ui| {
             super::soloist::settings(app, ui, rows_needle, &soloist, &soloist_rows);
         });
     }
@@ -582,7 +619,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     ];
     if section_matches(&needle, &account, &account_rows) {
         any_visible = true;
-        section(ui, &palette, &account, |ui| {
+        section(ui, &palette, &skin, &account, |ui| {
             if row_matches(&needle, &format!("{sign_out} {account}"), "") {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 14.0;
@@ -864,7 +901,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     }
     if section_matches(&needle, &playback, &playback_rows) {
         any_visible = true;
-        section(ui, &palette, &playback, |ui| {
+        section(ui, &palette, &skin, &playback, |ui| {
             filtered_row(ui, &palette, &needle, &playback, &playback_rows[0], |ui| {
                 if let Some(label) = action {
                     if theme::pill_button(ui, &palette, &label, true).clicked() {
@@ -1229,6 +1266,125 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         });
     }
 
+    let lyrics_section = gettext(locale, "Lyrics");
+    let word_timings = gettext(locale, "Word-level timings");
+    let word_timings_detail = gettext(
+        locale,
+        "Use Spicy Lyrics' catalogue for character-synced words when it has them. Spotify usually times whole lines.",
+    );
+    let api_key = gettext(locale, "Spicy Lyrics API key");
+    let api_key_detail = gettext(
+        locale,
+        "Stored privately on this computer, never in settings or logs.",
+    );
+    let get_key = gettext(locale, "Get a key");
+    let save_key = gettext(locale, "Save key");
+    let remove_key = gettext(locale, "Remove key");
+    let saved_note = gettext(
+        locale,
+        "Key saved. Word timings are used when the catalogue has them.",
+    );
+    let missing_note = gettext(locale, "Add a key to use word-level timings.");
+    let lyrics_rows = [
+        RowText::new(word_timings.clone(), word_timings_detail),
+        RowText::new(api_key.clone(), api_key_detail),
+        RowText::new(get_key.clone(), ""),
+    ];
+    if section_matches(&needle, &lyrics_section, &lyrics_rows) {
+        any_visible = true;
+        section(ui, &palette, &skin, &lyrics_section, |ui| {
+            filtered_row(
+                ui,
+                &palette,
+                &needle,
+                &lyrics_section,
+                &lyrics_rows[0],
+                |ui| {
+                    let mut on = app.settings.word_sync == WordSyncChoice::SpicyLyrics;
+                    if widgets::switch(ui, &palette, &word_timings, &mut on).changed() {
+                        app.settings.word_sync = if on {
+                            WordSyncChoice::SpicyLyrics
+                        } else {
+                            WordSyncChoice::Off
+                        };
+                        changed = true;
+                        app.actions.push(Action::RefreshLyrics);
+                    }
+                },
+            );
+            filtered_row(
+                ui,
+                &palette,
+                &needle,
+                &lyrics_section,
+                &lyrics_rows[1],
+                |ui| {
+                    let saved = *app
+                        .word_sync_key_saved
+                        .get_or_insert_with(|| crate::word_sync::load_key(&app.dirs).is_some());
+                    // The control area lays out right-to-left, so Save is
+                    // added first to sit at the field's right.
+                    let ready = crate::word_sync::valid_key(&app.word_sync_key_input);
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        let save = ui
+                            .add_enabled_ui(ready, |ui| {
+                                theme::soft_button(ui, &palette, None, &save_key, false)
+                            })
+                            .inner;
+                        if ready && save.clicked() {
+                            app.actions.push(Action::SaveWordSyncKey(
+                                app.word_sync_key_input.trim().to_string(),
+                            ));
+                        }
+                        Frame::new()
+                            .fill(palette.surface)
+                            .stroke(Stroke::new(1.0, palette.outline))
+                            .corner_radius(CornerRadius::same(6))
+                            .inner_margin(Margin::symmetric(10, 6))
+                            .show(ui, |ui| {
+                                widgets::text_edit(
+                                    ui,
+                                    locale,
+                                    egui::TextEdit::singleline(&mut app.word_sync_key_input)
+                                        .password(true)
+                                        .hint_text(
+                                            egui::RichText::new("sl_sk_...").color(palette.dim),
+                                        )
+                                        .font(theme::regular(13.0))
+                                        .frame(egui::Frame::NONE)
+                                        .desired_width(190.0),
+                                );
+                            });
+                        if saved
+                            && theme::soft_button(ui, &palette, None, &remove_key, false).clicked()
+                        {
+                            app.actions.push(Action::SaveWordSyncKey(String::new()));
+                        }
+                    });
+                    if saved {
+                        theme::subtle(ui, &palette, &saved_note);
+                    } else if app.settings.word_sync == WordSyncChoice::SpicyLyrics {
+                        theme::subtle(ui, &palette, &missing_note);
+                    }
+                },
+            );
+            filtered_row(
+                ui,
+                &palette,
+                &needle,
+                &lyrics_section,
+                &lyrics_rows[2],
+                |ui| {
+                    if theme::pill_button(ui, &palette, &get_key, false).clicked() {
+                        app.actions
+                            .push(Action::OpenUrl(crate::word_sync::DEVELOPERS_URL.into()));
+                    }
+                },
+            );
+        });
+    }
+
     let appearance = gettext(locale, "Appearance");
     let theme_title = gettext(locale, "Theme");
     let theme_guide = gettext(locale, "How to make a theme");
@@ -1275,6 +1431,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             );
             if !detail.is_empty() {
                 detail
+            } else if app.settings.theme == ThemeChoice::Lucid {
+                gettext(
+                    locale,
+                    "Lucid's Material surfaces, glass and cover-tinted panels, in light and dark.",
+                )
             } else if app.custom_themes.follows_omarchy() {
                 gettext(locale, "Follow system uses your Omarchy colours.")
             } else {
@@ -1362,7 +1523,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     }
     if section_matches(&needle, &appearance, &appearance_rows) {
         any_visible = true;
-        section(ui, &palette, &appearance, |ui| {
+        section(ui, &palette, &skin, &appearance, |ui| {
             // Wide enough for the theme's two buttons side by side.
             let theme_buttons_width = theme::soft_button_width(ui, &theme_guide)
                 + theme::soft_button_width(ui, &themes_folder)
@@ -1696,6 +1857,273 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         });
     }
 
+    let lucid_section = gettext(locale, "Lucid");
+    let lucid_glass = gettext(locale, "Glass");
+    let lucid_glass_detail = gettext(
+        locale,
+        "How much of the blurred cover shows through the library, page and player.",
+    );
+    let lucid_cover_tint = gettext(locale, "Cover colours in panels");
+    let lucid_cover_tint_detail = gettext(
+        locale,
+        "Mix the page or playing cover's colour into the glass, not only the backdrop behind it.",
+    );
+    let lucid_background = gettext(locale, "Background");
+    let lucid_background_detail = gettext(
+        locale,
+        "Blur the page or playing cover behind the panels, or keep a clean dark interface with no artwork and no cover colour.",
+    );
+    // The glass and the cover colour only describe the cover background;
+    // the clean dark one has nothing to show through either of them.
+    let lucid_cover = app.settings.lucid_background == crate::settings::LucidBackground::Cover;
+    let lucid_rows: Vec<RowText> = if lucid_cover {
+        vec![
+            RowText::new(lucid_background.clone(), lucid_background_detail),
+            RowText::new(lucid_glass.clone(), lucid_glass_detail),
+            RowText::new(lucid_cover_tint.clone(), lucid_cover_tint_detail),
+        ]
+    } else {
+        vec![RowText::new(
+            lucid_background.clone(),
+            lucid_background_detail,
+        )]
+    };
+    if super::lucid::enabled(app) && section_matches(&needle, &lucid_section, &lucid_rows) {
+        any_visible = true;
+        section(ui, &palette, &skin, &lucid_section, |ui| {
+            filtered_row(
+                ui,
+                &palette,
+                &needle,
+                &lucid_section,
+                &lucid_rows[0],
+                |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        for (choice, label) in [
+                            (
+                                crate::settings::LucidBackground::Cover,
+                                gettext(locale, "Cover"),
+                            ),
+                            (
+                                crate::settings::LucidBackground::Dark,
+                                gettext(locale, "Dark"),
+                            ),
+                        ] {
+                            if theme::soft_button(
+                                ui,
+                                &palette,
+                                None,
+                                &label,
+                                app.settings.lucid_background == choice,
+                            )
+                            .clicked()
+                                && app.settings.lucid_background != choice
+                            {
+                                app.settings.lucid_background = choice;
+                                changed = true;
+                            }
+                        }
+                    });
+                },
+            );
+            if lucid_cover {
+                filtered_row(
+                    ui,
+                    &palette,
+                    &needle,
+                    &lucid_section,
+                    &lucid_rows[1],
+                    |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            for (choice, label) in [
+                                (crate::settings::LucidGlass::Off, gettext(locale, "Off")),
+                                (crate::settings::LucidGlass::Soft, gettext(locale, "Soft")),
+                                (crate::settings::LucidGlass::Clear, gettext(locale, "Clear")),
+                            ] {
+                                if theme::soft_button(
+                                    ui,
+                                    &palette,
+                                    None,
+                                    &label,
+                                    app.settings.lucid_glass == choice,
+                                )
+                                .clicked()
+                                    && app.settings.lucid_glass != choice
+                                {
+                                    app.settings.lucid_glass = choice;
+                                    changed = true;
+                                }
+                            }
+                        });
+                    },
+                );
+                filtered_row(
+                    ui,
+                    &palette,
+                    &needle,
+                    &lucid_section,
+                    &lucid_rows[2],
+                    |ui| {
+                        if widgets::switch(
+                            ui,
+                            &palette,
+                            &lucid_cover_tint,
+                            &mut app.settings.lucid_cover_tint,
+                        )
+                        .changed()
+                        {
+                            changed = true;
+                        }
+                    },
+                );
+            }
+        });
+    }
+
+    let spicy_section = gettext(locale, "Spicy Lyrics");
+    let spicy_now_playing = gettext(locale, "Show in Now Playing");
+    let spicy_now_playing_detail = gettext(
+        locale,
+        "A small live lyrics block under the song in the Now Playing column, with a way into full screen.",
+    );
+    let spicy_motion = gettext(locale, "Animation speed");
+    let spicy_motion_detail = gettext(
+        locale,
+        "How quickly letters swell, lines lift and the sung glow settles.",
+    );
+    let spicy_glow = gettext(locale, "Letter glow");
+    let spicy_glow_detail = gettext(locale, "Draw the soft halo around the word being sung.");
+    let spicy_backdrop = gettext(locale, "Blurred cover backdrop");
+    let spicy_backdrop_detail = gettext(
+        locale,
+        "Show the playing cover behind the full-screen words instead of plain black.",
+    );
+    let spicy_motion_row = gettext(locale, "Now Playing animation");
+    let spicy_motion_row_detail = gettext(
+        locale,
+        "Let the words swell and glow as they are sung in the Now Playing column.",
+    );
+    let spicy_rows = [
+        RowText::new(spicy_now_playing.clone(), spicy_now_playing_detail),
+        RowText::new(spicy_motion_row.clone(), spicy_motion_row_detail),
+        RowText::new(spicy_motion.clone(), spicy_motion_detail),
+        RowText::new(spicy_glow.clone(), spicy_glow_detail),
+        RowText::new(spicy_backdrop.clone(), spicy_backdrop_detail),
+    ];
+    if section_matches(&needle, &spicy_section, &spicy_rows) {
+        any_visible = true;
+        section(ui, &palette, &skin, &spicy_section, |ui| {
+            filtered_row(
+                ui,
+                &palette,
+                &needle,
+                &spicy_section,
+                &spicy_rows[0],
+                |ui| {
+                    if widgets::switch(
+                        ui,
+                        &palette,
+                        &spicy_now_playing,
+                        &mut app.settings.spicy_now_playing,
+                    )
+                    .changed()
+                    {
+                        changed = true;
+                    }
+                },
+            );
+            filtered_row(
+                ui,
+                &palette,
+                &needle,
+                &spicy_section,
+                &spicy_rows[1],
+                |ui| {
+                    if widgets::switch(
+                        ui,
+                        &palette,
+                        &spicy_motion_row,
+                        &mut app.settings.spicy_now_playing_motion,
+                    )
+                    .changed()
+                    {
+                        changed = true;
+                    }
+                },
+            );
+            filtered_row(
+                ui,
+                &palette,
+                &needle,
+                &spicy_section,
+                &spicy_rows[2],
+                |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        for (choice, label) in [
+                            (crate::settings::SpicyMotion::Off, gettext(locale, "Off")),
+                            (crate::settings::SpicyMotion::Slow, gettext(locale, "Slow")),
+                            (
+                                crate::settings::SpicyMotion::Normal,
+                                gettext(locale, "Normal"),
+                            ),
+                            (crate::settings::SpicyMotion::Fast, gettext(locale, "Fast")),
+                        ] {
+                            if theme::soft_button(
+                                ui,
+                                &palette,
+                                None,
+                                &label,
+                                app.settings.spicy_motion == choice,
+                            )
+                            .clicked()
+                                && app.settings.spicy_motion != choice
+                            {
+                                app.settings.spicy_motion = choice;
+                                changed = true;
+                            }
+                        }
+                    });
+                },
+            );
+            filtered_row(
+                ui,
+                &palette,
+                &needle,
+                &spicy_section,
+                &spicy_rows[3],
+                |ui| {
+                    if widgets::switch(ui, &palette, &spicy_glow, &mut app.settings.spicy_glow)
+                        .changed()
+                    {
+                        changed = true;
+                    }
+                },
+            );
+            filtered_row(
+                ui,
+                &palette,
+                &needle,
+                &spicy_section,
+                &spicy_rows[4],
+                |ui| {
+                    if widgets::switch(
+                        ui,
+                        &palette,
+                        &spicy_backdrop,
+                        &mut app.settings.spicy_fullscreen_backdrop,
+                    )
+                    .changed()
+                    {
+                        changed = true;
+                    }
+                },
+            );
+        });
+    }
+
     let proxy = gettext(locale, "Proxy");
     let proxy_rows = [RowText::new(
         gettext(locale, "Mode, host, port, username and password"),
@@ -1707,7 +2135,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     if section_matches(&needle, &proxy, &proxy_rows) {
         any_visible = true;
         ui.push_id("proxy-settings", |ui| {
-    section(ui, &palette, &proxy, |ui| {
+    section(ui, &palette, &skin, &proxy, |ui| {
         widgets::setting_row(
             ui,
             &palette,
@@ -1877,7 +2305,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     ];
     if section_matches(&needle, &mini_player, &mini_rows) {
         any_visible = true;
-        section(ui, &palette, &mini_player, |ui| {
+        section(ui, &palette, &skin, &mini_player, |ui| {
             filtered_row(ui, &palette, &needle, &mini_player, &mini_rows[0], |ui| {
                 if theme::pill_button(ui, &palette, &gettext(locale, "Switch to it"), true)
                     .clicked()
@@ -2176,7 +2604,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     ];
     if visualizers && section_matches(&needle, "MilkDrop", &milkdrop_rows) {
         any_visible = true;
-        section(ui, &palette, "MilkDrop", |ui| {
+        section(ui, &palette, &skin, "MilkDrop", |ui| {
             filtered_row(ui, &palette, &needle, "MilkDrop", &milkdrop_rows[0], |ui| {
                 let mut open = app.settings.milkdrop_open;
                 if widgets::switch(ui, &palette, &milkdrop_window, &mut open).changed() {
@@ -2309,7 +2737,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     ];
     if audio_processing && section_matches(&needle, &equalizer, &equalizer_rows) {
         any_visible = true;
-        section(ui, &palette, &equalizer, |ui| {
+        section(ui, &palette, &skin, &equalizer, |ui| {
             filtered_row(
                 ui,
                 &palette,
@@ -2432,7 +2860,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             };
             row.title = format!("{} · {size}", row.title).into();
         }
-        section(ui, &palette, &storage, |ui| {
+        section(ui, &palette, &skin, &storage, |ui| {
             filtered_row(ui, &palette, &needle, &storage, &storage_rows[0], |ui| {
                 if theme::soft_button(
                     ui,
@@ -2501,7 +2929,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     ];
     if section_matches(&needle, &about, &about_rows) {
         any_visible = true;
-        section(ui, &palette, &about, |ui| {
+        section(ui, &palette, &skin, &about, |ui| {
             ui.horizontal(|ui| {
                 let (logo, _) = ui.allocate_exact_size(Vec2::splat(40.0), egui::Sense::hover());
                 theme::logo(ui, logo.center(), 40.0);

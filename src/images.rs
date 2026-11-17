@@ -27,7 +27,11 @@ use crate::http::Http;
 /// encoded bytes of covers still waiting to be painted. A card's cover is
 /// scaled to the 192 or so pixels it covers and holds about 200 KB, so a page
 /// of cards stays well inside it.
-const HELD_BYTES: usize = 64 * 1024 * 1024;
+///
+/// What is painted is what is kept: a cover seen on screen outranks one only
+/// read before, so the budget can be smaller without a large window losing a
+/// cover it is showing.
+const HELD_BYTES: usize = 48 * 1024 * 1024;
 const MAX_ART_BYTES: usize = 8 * 1024 * 1024;
 
 /// How long another copy of the same artwork goes on being painted without
@@ -237,7 +241,15 @@ impl ArtLoader {
                         retained,
                         ..
                     } => {
-                        held.push((url.clone(), *last_used, *retained + scaled));
+                        // A copy painted on this screen is in use now, even if
+                        // its bytes were first read long ago; without this the
+                        // eviction order would forget what is actually visible
+                        // and a resized window would reload covers every pass.
+                        let painted = textures
+                            .get(url)
+                            .and_then(|copies| copies.values().map(|copy| copy.painted).max());
+                        let used = painted.map_or(*last_used, |painted| painted.max(*last_used));
+                        held.push((url.clone(), used, *retained + scaled));
                     }
                     Entry::Pending => {}
                 }
@@ -783,19 +795,38 @@ const LYRICS_BLUR: f32 = 9.0;
 const COVER_BLUR: f32 = 1.5;
 
 /// Softened covers held at once, for library artwork seen recently.
-const HELD_COVERS: usize = 64;
+const HELD_COVERS: usize = 32;
+
+/// A cover blurred once for the full-window backdrop, and again far more
+/// lightly for the page header's bloom, which Lucid keeps recognizable.
+struct Backdrops {
+    backdrop: egui::ColorImage,
+    bloom: egui::ColorImage,
+    /// The bloom's mean lightness, 0..=1, so Lucid can dim a white cover's
+    /// bloom instead of painting a white sheet behind the page title.
+    bloom_luma: f32,
+}
 
 #[derive(Default)]
 pub struct LyricsBackdrop {
     uri: Option<String>,
     requested: bool,
     retry_at: Option<Instant>,
-    pending: Option<std::sync::mpsc::Receiver<Result<Option<egui::ColorImage>, String>>>,
+    pending: Option<std::sync::mpsc::Receiver<Result<Option<Backdrops>, String>>>,
     texture: Option<egui::TextureHandle>,
+    bloom: Option<egui::TextureHandle>,
+    bloom_luma: f32,
 }
 
 /// How long a backdrop whose artwork failed to download waits to ask again.
 const BACKDROP_RETRY: Duration = Duration::from_secs(3);
+
+/// The header bloom's blur, at the texture's own size: lighter than the
+/// backdrop's, so the cover still reads as a picture up there.
+const BLOOM_BLUR: f32 = 3.5;
+/// The header bloom's texture size, larger than the backdrop's for the same
+/// reason.
+const BLOOM_PIXELS: u32 = 512;
 
 impl LyricsBackdrop {
     /// The blurred backdrop for `uri`.
@@ -812,14 +843,57 @@ impl LyricsBackdrop {
         loader: &ArtLoader,
         uri: Option<&str>,
     ) -> Option<&egui::TextureHandle> {
+        self.prepare(ctx, loader, uri);
+        self.texture.as_ref()
+    }
+
+    /// The same cover, lightly blurred, for Lucid's page-header bloom.
+    ///
+    /// It always names a cover: asking with none would clear the shared
+    /// backdrop a page is already showing, and re-blur it every frame.
+    pub fn bloom(
+        &mut self,
+        ctx: &egui::Context,
+        loader: &ArtLoader,
+        uri: &str,
+    ) -> Option<&egui::TextureHandle> {
+        self.prepare(ctx, loader, Some(uri));
+        self.bloom.as_ref()
+    }
+
+    /// The bloom's mean lightness, 0..=1. A white cover reads near 1.
+    pub fn bloom_luma(&self) -> f32 {
+        self.bloom_luma
+    }
+
+    /// Whether a blurred backdrop is ready, so a test can tell that a page
+    /// without artwork did not clear the one already showing.
+    #[cfg(test)]
+    pub fn is_showing(&self) -> bool {
+        self.texture.is_some()
+    }
+
+    fn prepare(&mut self, ctx: &egui::Context, loader: &ArtLoader, uri: Option<&str>) {
         if self.uri.as_deref() != uri {
             *self = Self {
                 uri: uri.map(str::to_owned),
                 texture: self.texture.take().filter(|_| uri.is_some()),
+                bloom: self.bloom.take().filter(|_| uri.is_some()),
                 ..Default::default()
             };
         }
-        let uri = uri?;
+        let Some(uri) = uri else {
+            return;
+        };
+        // The demo's covers are included bytes rather than downloads, so the
+        // backdrop takes them straight from egui and blurs them there.
+        #[cfg(feature = "demo")]
+        if !self.requested && !is_art(uri) {
+            self.requested = true;
+            if let Ok(egui::load::BytesPoll::Ready { bytes, .. }) = ctx.try_load_bytes(uri) {
+                self.load(ctx, blur_cover(&bytes));
+            }
+        }
         let due = self.retry_at.is_none_or(|at| Instant::now() >= at);
         if !self.requested && due && is_art(uri) {
             self.requested = true;
@@ -833,7 +907,7 @@ impl LyricsBackdrop {
                 let result = match inner.fetch(&url).await {
                     Ok(bytes) => inner
                         .runtime
-                        .spawn_blocking(move || blurred_background(&bytes, LYRICS_BLUR))
+                        .spawn_blocking(move || blur_cover(&bytes))
                         .await
                         .map_err(|error| error.to_string()),
                     Err(error) => Err(error),
@@ -844,10 +918,8 @@ impl LyricsBackdrop {
         }
         if let Some(receiver) = &self.pending {
             match receiver.try_recv() {
-                Ok(Ok(image)) => {
-                    self.texture = image.map(|image| {
-                        ctx.load_texture("lyrics-backdrop", image, egui::TextureOptions::LINEAR)
-                    });
+                Ok(Ok(images)) => {
+                    self.load(ctx, images);
                     self.pending = None;
                 }
                 Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -859,8 +931,55 @@ impl LyricsBackdrop {
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
         }
-        self.texture.as_ref()
     }
+
+    fn load(&mut self, ctx: &egui::Context, images: Option<Backdrops>) {
+        let Some(Backdrops {
+            backdrop,
+            bloom,
+            bloom_luma,
+        }) = images
+        else {
+            return;
+        };
+        self.bloom_luma = bloom_luma;
+        self.texture =
+            Some(ctx.load_texture("lyrics-backdrop", backdrop, egui::TextureOptions::LINEAR));
+        self.bloom =
+            Some(ctx.load_texture("lyrics-backdrop-bloom", bloom, egui::TextureOptions::LINEAR));
+    }
+}
+
+/// Blur a cover for the backdrop and, less, for the header bloom.
+fn blur_cover(bytes: &[u8]) -> Option<Backdrops> {
+    let image = decode(bytes).ok()?;
+    let backdrop = blurred_image(image.clone(), LYRICS_BLUR);
+    let bloom = blurred_cover(image, BLOOM_BLUR, BLOOM_PIXELS);
+    let bloom_luma = mean_luma(&bloom);
+    Some(Backdrops {
+        backdrop,
+        bloom,
+        bloom_luma,
+    })
+}
+
+/// A colour image's mean perceptual lightness, 0..=1.
+fn mean_luma(image: &egui::ColorImage) -> f32 {
+    let pixels = image.pixels.len();
+    if pixels == 0 {
+        return 0.0;
+    }
+    let sum: f32 = image
+        .pixels
+        .iter()
+        .map(|pixel| {
+            (0.2126 * f32::from(pixel.r())
+                + 0.7152 * f32::from(pixel.g())
+                + 0.0722 * f32::from(pixel.b()))
+                / 255.0
+        })
+        .sum();
+    sum / pixels as f32
 }
 
 /// Softened artwork for covers that are still loading, one entry per URL.
@@ -997,7 +1116,12 @@ fn blurred_background(bytes: &[u8], sigma: f32) -> Option<egui::ColorImage> {
 }
 
 fn blurred_image(image: image::DynamicImage, sigma: f32) -> egui::ColorImage {
-    let image = image.thumbnail(256, 256).blur(sigma).to_rgba8();
+    blurred_cover(image, sigma, 256)
+}
+
+/// `image` shrunk so its longer side is `pixels`, then blurred by `sigma`.
+fn blurred_cover(image: image::DynamicImage, sigma: f32, pixels: u32) -> egui::ColorImage {
+    let image = image.thumbnail(pixels, pixels).blur(sigma).to_rgba8();
     egui::ColorImage::from_rgba_unmultiplied(
         [image.width() as usize, image.height() as usize],
         image.as_raw(),
@@ -2105,6 +2229,14 @@ mod tests {
     }
 
     #[test]
+    fn bloom_lightness_reads_white_black_and_grey() {
+        let luma = |colour| mean_luma(&egui::ColorImage::filled([2, 2], colour));
+        assert!((luma(egui::Color32::WHITE) - 1.0).abs() < 0.001);
+        assert!(luma(egui::Color32::BLACK).abs() < 0.001);
+        assert!((luma(egui::Color32::from_gray(128)) - 0.502).abs() < 0.01);
+    }
+
+    #[test]
     fn large_covers_evict_using_texture_sizes() {
         let one = texture_bytes(640, 640);
         assert_eq!(one, 640 * 640 * 4 * 4 / 3);
@@ -2151,7 +2283,8 @@ mod tests {
         assert_eq!(before, 40 * one);
         assert!(
             before > HELD_BYTES,
-            "640×640 cover textures must exceed 64 MiB: {before}"
+            "640×640 cover textures must exceed the {} MiB budget: {before}",
+            HELD_BYTES / (1024 * 1024)
         );
         let ctx = egui::Context::default();
         loader.evict(&ctx);
@@ -2505,10 +2638,11 @@ mod tests {
         });
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| cover(ui, next));
         output.textures_delta.clear();
-        assert_eq!(
-            painted_textures(&output.shapes),
-            [texture_named(&ctx, &shown).unwrap()],
-            "the last song's cover stays"
+        let old = texture_named(&ctx, &shown).unwrap();
+        let painted = painted_textures(&output.shapes);
+        assert!(
+            painted.contains(&old),
+            "the last song's cover stays under the fade: {painted:?}"
         );
         paint_until_made(&runtime, &ctx, &[scaled_uri(next, 64)], |ui| {
             cover(ui, next)

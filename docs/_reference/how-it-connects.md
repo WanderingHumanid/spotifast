@@ -257,7 +257,9 @@ out, or a reconnection that gives up stops it.
   when a song starts, even when no view on screen is showing it. Linux MPRIS
   carries the Spotify artwork URL for the desktop to resolve and asks for
   nothing extra.
-- Lyrics, in the cache directory, for a month.
+- Lyrics, in the cache directory, for a month. Word-level answers and misses
+  from the optional provider have their own `words-v2-<track>.json` files, so
+  turning it off returns to the ordinary cache.
 - Liked Songs metadata, scoped to the verified account, in the cache directory.
   This behavior is available since 0.8.0.
   Cached pages less than 15 minutes old need no repeat request. Older cached
@@ -267,7 +269,9 @@ out, or a reconnection that gives up stops it.
 - Spotifast has no telemetry, analytics, or hosted service. When the lyrics
   panel is open and neither Spotify nor a local file has lyrics, it sends
   the track's artist, title, album, and length to
-  [lrclib.net](https://lrclib.net). It also checks
+  [lrclib.net](https://lrclib.net). With **Settings > Lyrics > Word-level
+  timings** on, it first asks [api.spicylyrics.org](https://developers.spicylyrics.org/)
+  for the track id, using the key saved there. It also checks
   api.github.com once a day for updates. You can turn off automatic checks in
   Settings, or request one there at any time. On macOS, **Check for Updates**
   is also in the application menu. On a connection the system reports as

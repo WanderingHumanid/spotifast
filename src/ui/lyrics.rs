@@ -50,11 +50,21 @@ pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
         .default_size(app.settings.lyrics_width)
         .size_range(fit.range.clone())
         .show_separator_line(false)
-        .frame(
+        .frame(if super::lucid::enabled(app) {
+            super::lucid::card(app, super::lucid::RADIUS)
+                .fill(super::lucid::glass(app, palette.panel))
+                .inner_margin(Margin::symmetric(12, 12))
+                .outer_margin(Margin {
+                    left: 8,
+                    right: 8,
+                    top: 8,
+                    bottom: 8,
+                })
+        } else {
             Frame::new()
                 .fill(palette.panel)
-                .inner_margin(Margin::symmetric(12, 12)),
-        );
+                .inner_margin(Margin::symmetric(12, 12))
+        });
     let response = panel.show(ui, |ui| {
         let window_controls = super::window_controls_reservation(
             ui.ctx(),
@@ -272,6 +282,9 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                 };
                 crate::autoscroll::row(ui, &response);
                 let rect = response.rect;
+                if lyrics.synced {
+                    theme::lyric_edge(ui, &response, &palette, rect);
+                }
                 if lyrics.synced
                     && response.clicked()
                     && let Some(at_ms) = line.at_ms
@@ -283,6 +296,9 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                     show_sung_line(ui, rect, None);
                 }
                 ui.add_space(LINE_GAP);
+            }
+            if let Some(attribution) = lyrics.attribution.as_ref() {
+                widgets::lyrics_attribution(app, ui, attribution, 11.0, &palette);
             }
             // Words without timing can only be followed by the clock: sit
             // at the part of the text the song is probably at.
@@ -953,6 +969,9 @@ fn fullscreen_contents(app: &mut App, ui: &mut egui::Ui) {
                     })
                     .inner;
                 let rect = response.rect;
+                if lyrics.synced {
+                    theme::lyric_edge(ui, &response, &palette, rect);
+                }
                 if lyrics.synced
                     && response.clicked()
                     && let Some(at_ms) = line.at_ms
@@ -964,6 +983,9 @@ fn fullscreen_contents(app: &mut App, ui: &mut egui::Ui) {
                     show_sung_line(ui, rect, Some(animation));
                 }
                 ui.add_space(27.0);
+            }
+            if let Some(attribution) = lyrics.attribution.as_ref() {
+                widgets::lyrics_attribution(app, ui, attribution, 12.0, &palette);
             }
             // Words without timing can only be followed by the clock: sit
             // at the part of the text the song is probably at.

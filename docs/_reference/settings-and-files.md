@@ -23,6 +23,7 @@ Spotifast follows each platform's conventions. On Linux:
 | Proxy password | System credential store | Clear the password and apply the manual proxy settings |
 | Legacy proxy password | `~/.local/state/spotifast/proxy_password` | Removed after protected migration |
 | Last session | `~/.local/state/spotifast/session.json` | Yes |
+| Spicy Lyrics key, when word-level timings are on | `~/.local/state/spotifast/spicy-lyrics-key` | Remove it in Settings > Lyrics |
 | Play history | `~/.local/state/spotifast/history.json` | Yes |
 | Audio cache | `~/.cache/spotifast/audio/` | Always |
 | Artwork cache | `~/.cache/spotifast/art/` | Always |
@@ -379,7 +380,7 @@ main fields are:
 | `audio_device` | `null` | The output local playback uses, by the id of a device **Audio output** in the device picker lists: PipeWire's or PulseAudio's node name or an ALSA PCM on Linux, the WASAPI endpoint id on Windows, the CoreAudio UID on macOS. `null` is the system default. A device that is not there plays through the default. A name saved by 0.13.3 or earlier opens the output that still has it and is replaced by its id once music plays there; any other name plays through the default and is kept until another choice. The `audio_backend` older versions saved is ignored and no longer written |
 | `audio_cache_mb` | `1024` | On-disk audio cache budget |
 | `local_files_folder` | `null` | Folder, with its subfolders, that a playlist's local files play from |
-| `theme` | `system` | Follow the system appearance by default; explicit `dark` and `light` choices remain available |
+| `theme` | `system` | Follow the system appearance by default; explicit `dark`, `light` and `lucid` choices remain available. `lucid` is the built-in port of the Spicetify theme, with a palette for each appearance |
 | `language` | `system` | Since 0.10.0: the interface language. `system` follows the operating system's preferred languages and falls back to English; a tag such as `es`, `de-DE`, `pt-BR` or `zh-Hant` selects that language. An unknown tag follows the system |
 | `custom_theme` | `null` | Selected JSON filename from the `themes` folder |
 | `custom_theme_cache` | absent | Last accepted custom palette; preserves appearance if its file is missing or invalid |
@@ -424,6 +425,7 @@ main fields are:
 | `milkdrop_fullscreen` | `false` | The MilkDrop window fills the screen |
 | `milkdrop_panel_height` | `232` | The MilkDrop panel's height in the mini player, in skin pixels |
 | `lyrics_milkdrop` | `false` | MilkDrop rather than the cover's art behind full screen lyrics |
+| `word_sync` | `off` | Optional word-level lyrics: `off` or `spicy_lyrics`. Needs a key saved in Settings > Lyrics |
 | `milkdrop_size` | `640, 480` | The MilkDrop window's size in points |
 | `keep_playing_in_background` | `true` | Close to tray |
 | `tray_icon` | `colour` | Linux and Windows: the tray icon in `colour`, or in `white` or `black` to match the panel or taskbar. macOS ignores it: the menu bar draws its icon black or white to match itself |

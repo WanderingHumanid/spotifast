@@ -980,6 +980,8 @@ pub struct LyricsRequest {
     /// The local file a `spotify:local:` track plays from, whose own
     /// lyrics come before LRCLIB's.
     pub local_file: Option<std::path::PathBuf>,
+    /// Ask the optional word-level provider before the line-level sources.
+    pub word_sync: bool,
 }
 
 pub enum Event {
@@ -4768,29 +4770,57 @@ impl Worker {
         let waker = self.waker.clone();
         let cache_dir = self.dirs.lyrics_cache_dir();
         let engine = self.engine.clone();
+        let key_path = crate::word_sync::key_path(&self.dirs);
+        let track_id = request
+            .uri
+            .strip_prefix("spotify:track:")
+            .filter(|_| request.word_sync && request.local_file.is_none())
+            .map(str::to_string);
         tokio::spawn(async move {
+            // The optional word-level catalogue goes first only when it is
+            // switched on. Its miss falls through to the ordinary sources.
+            let key = track_id
+                .as_ref()
+                .and_then(|_| crate::word_sync::load_key_at(&key_path));
+            let word = match (&http, key.as_deref(), track_id.as_deref()) {
+                (Ok(http), Some(key), Some(id)) => {
+                    crate::lyrics::word_sync(
+                        http,
+                        &cache_dir,
+                        crate::lyrics::WordSync { track_id: id, key },
+                    )
+                    .await
+                }
+                _ => None,
+            };
             // A local file's own words go first, then Spotify's: they
             // follow the recording exactly. Everything else, a signed-out
             // session included, falls back to LRCLIB.
-            let own = match request.local_file {
-                Some(file) => tokio::task::spawn_blocking(move || crate::local_tags::lyrics(&file))
-                    .await
-                    .ok()
-                    .flatten(),
-                None => None,
-            };
-            let exact = match own {
-                Some(found) => Some(found),
-                None => spotify_lyrics(engine, &request.uri, &cache_dir).await,
-            };
-            let result = match exact {
-                Some(found) => Ok(Some(found)),
-                None => match http {
-                    Ok(http) => crate::lyrics::fetch(&http, &cache_dir, &request.query)
-                        .await
-                        .map_err(|error| format!("{error:#}")),
-                    Err(error) => Err(error),
-                },
+            let result = if let Some(found) = word {
+                Ok(Some(found))
+            } else {
+                let own = match request.local_file {
+                    Some(file) => {
+                        tokio::task::spawn_blocking(move || crate::local_tags::lyrics(&file))
+                            .await
+                            .ok()
+                            .flatten()
+                    }
+                    None => None,
+                };
+                let exact = match own {
+                    Some(found) => Some(found),
+                    None => spotify_lyrics(engine, &request.uri, &cache_dir).await,
+                };
+                match exact {
+                    Some(found) => Ok(Some(found)),
+                    None => match http {
+                        Ok(http) => crate::lyrics::fetch(&http, &cache_dir, &request.query)
+                            .await
+                            .map_err(|error| format!("{error:#}")),
+                        Err(error) => Err(error),
+                    },
+                }
             };
             let _ = events.send(Event::Lyrics {
                 uri: request.uri,

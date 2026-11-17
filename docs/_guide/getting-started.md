@@ -127,8 +127,12 @@ You can rename it in Settings.
 
 ## Match your desktop theme
 
-Open **Settings → Appearance → Theme** and choose **Light**, **Dark**, or
-**Follow system**. Follow system matches your desktop's appearance.
+Open **Settings → Appearance → Theme** and choose **Light**, **Dark**,
+**Lucid**, or **Follow system**. Follow system matches your desktop's
+appearance. Lucid is a native port of the Spicetify theme by Sachu: Material
+tonal surfaces and Spotify green, with a light and a dark palette that follow
+your desktop, floating rounded panels with Lucid's 8px gap, and the playing
+cover blurred behind them as its ambient background.
 
 With Follow system, **Light mode theme** and **Dark mode theme** below it
 pick the theme for each: for example Catppuccin Latte while your computer is

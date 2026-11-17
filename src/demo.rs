@@ -19,24 +19,136 @@ use crate::app::{App, RemoteSnapshot};
 use crate::backend::AuthStatus;
 use crate::model::*;
 
+pub(crate) const DEMO_SQUARE_ART: &str = "bytes://demo-cover-square.png";
+pub(crate) const DEMO_ALT_ART: &str = "bytes://demo-cover-alt.png";
+pub(crate) const DEMO_WIDE_ART: &str = "bytes://demo-cover-wide.png";
+pub(crate) const DEMO_TALL_ART: &str = "bytes://demo-cover-tall.png";
+pub(crate) const DEMO_CORRUPT_ART: &str = "bytes://demo-cover-corrupt.png";
+
+/// Real PNG bytes for the demo covers. The images are generated here rather
+/// than downloaded so every capture decodes the same artwork offline.
+type DemoFixtures = Vec<(&'static str, std::sync::Arc<[u8]>)>;
+
+fn demo_fixtures() -> &'static DemoFixtures {
+    static FIXTURES: std::sync::OnceLock<DemoFixtures> = std::sync::OnceLock::new();
+    FIXTURES.get_or_init(|| {
+        vec![
+            (DEMO_SQUARE_ART, fixture_png(640, 640, sunset).into()),
+            (DEMO_ALT_ART, fixture_png(640, 640, checker).into()),
+            (DEMO_WIDE_ART, fixture_png(960, 540, wide).into()),
+            (DEMO_TALL_ART, fixture_png(480, 800, tall).into()),
+            (DEMO_CORRUPT_ART, b"this is not an image".to_vec().into()),
+        ]
+    })
+}
+
+fn fixture_png(width: u32, height: u32, pixel: fn(u32, u32, u32, u32) -> [u8; 4]) -> Vec<u8> {
+    let mut image = image::RgbaImage::new(width, height);
+    for (x, y, out) in image.enumerate_pixels_mut() {
+        *out = image::Rgba(pixel(x, y, width, height));
+    }
+    let mut encoded = std::io::Cursor::new(Vec::new());
+    image
+        .write_to(&mut encoded, image::ImageFormat::Png)
+        .expect("demo cover encodes");
+    encoded.into_inner()
+}
+
+fn sunset(x: u32, y: u32, width: u32, height: u32) -> [u8; 4] {
+    let fx = x as f32 / width as f32;
+    let fy = y as f32 / height as f32;
+    let mut rgb = [
+        (238.0 - 70.0 * fy) as u8,
+        (88.0 + 90.0 * fx) as u8,
+        (120.0 + 80.0 * (1.0 - fy)) as u8,
+        255,
+    ];
+    let border = x < 18 || y < 18 || x >= width - 18 || y >= height - 18;
+    let cx = (x as f32 - width as f32 / 2.0) / (width as f32 * 0.32);
+    let cy = (y as f32 - height as f32 * 0.58) / (height as f32 * 0.25);
+    if cx * cx + cy * cy < 1.0 {
+        rgb = [255, 226, 150, 255];
+    }
+    if border {
+        rgb = [255, 244, 214, 255];
+    }
+    rgb
+}
+
+fn checker(x: u32, y: u32, width: u32, height: u32) -> [u8; 4] {
+    let cell = 80;
+    let light = (x / cell + y / cell).is_multiple_of(2);
+    let border = x < 22 || y < 22 || x >= width - 22 || y >= height - 22;
+    if border {
+        [245, 249, 255, 255]
+    } else if light {
+        [74, 52, 160, 255]
+    } else {
+        [124, 204, 238, 255]
+    }
+}
+
+fn wide(x: u32, y: u32, width: u32, height: u32) -> [u8; 4] {
+    let fx = x as f32 / width as f32;
+    let mut rgb = [
+        (20.0 + 50.0 * fx) as u8,
+        (110.0 + 70.0 * fx) as u8,
+        (135.0 + 60.0 * (1.0 - fx)) as u8,
+        255,
+    ];
+    let border = x < 24 || y < 24 || x >= width - 24 || y >= height - 24;
+    let band = (y as f32 - height as f32 / 2.0).abs() < 12.0;
+    if border || band {
+        rgb = [255, 214, 90, 255];
+    }
+    let cx = x as f32 - width as f32 / 2.0;
+    let cy = y as f32 - height as f32 / 2.0;
+    if cx * cx + cy * cy < 86.0 * 86.0 {
+        rgb = [245, 245, 245, 255];
+    }
+    rgb
+}
+
+fn tall(x: u32, y: u32, width: u32, height: u32) -> [u8; 4] {
+    let border = x < 20 || y < 20 || x >= width - 20 || y >= height - 20;
+    if border {
+        [238, 255, 220, 255]
+    } else if (x / 60).is_multiple_of(2) {
+        [32, 112, 78, 255]
+    } else {
+        [96, 186, 104, 255]
+    }
+}
+
+/// Put the demo artwork into the context's byte loader. Called once after
+/// the app attaches, before the first frame draws a cover.
+pub fn install_art(ctx: &egui::Context) {
+    for (uri, bytes) in demo_fixtures() {
+        ctx.include_bytes(*uri, bytes.clone());
+    }
+}
+
+fn demo_art(seed: u32) -> (&'static str, u32, u32) {
+    // Album zero is the playing track, so give it the wide picture: every
+    // playing cover then proves the same aspect-correct crop.
+    match seed {
+        200 => (DEMO_WIDE_ART, 960, 540),
+        300 => (DEMO_TALL_ART, 480, 800),
+        _ => match seed % 3 {
+            0 => (DEMO_SQUARE_ART, 640, 640),
+            1 => (DEMO_ALT_ART, 640, 640),
+            _ => (DEMO_TALL_ART, 480, 800),
+        },
+    }
+}
+
 fn image(seed: u32) -> Vec<Image> {
-    vec![
-        Image {
-            url: format!("https://picsum.photos/seed/spotifast{seed}/640/640"),
-            width: Some(640),
-            height: Some(640),
-        },
-        Image {
-            url: format!("https://picsum.photos/seed/spotifast{seed}/300/300"),
-            width: Some(300),
-            height: Some(300),
-        },
-        Image {
-            url: format!("https://picsum.photos/seed/spotifast{seed}/64/64"),
-            width: Some(64),
-            height: Some(64),
-        },
-    ]
+    let (url, width, height) = demo_art(seed);
+    vec![Image {
+        url: url.to_string(),
+        width: Some(width),
+        height: Some(height),
+    }]
 }
 
 const ARTISTS: &[&str] = &[
@@ -877,11 +989,55 @@ fn sample_lyrics() -> crate::lyrics::Lyrics {
             .map(|(at_ms, text)| crate::lyrics::Line {
                 at_ms: Some(*at_ms),
                 text: (*text).to_string(),
+                ..crate::lyrics::Line::default()
             })
             .collect(),
         synced: true,
         instrumental: false,
+        attribution: None,
     }
+}
+
+/// The demo words with real word timings on one line, so a demo shot can show
+/// the character animation that only source-timed lyrics allow.
+#[cfg(feature = "demo")]
+fn sample_lyrics_with_words() -> crate::lyrics::Lyrics {
+    let mut lyrics = sample_lyrics();
+    let timing = |at_ms: u32, end_ms: u32, text: &str| crate::lyrics::Syllable {
+        at_ms,
+        end_ms: Some(end_ms),
+        text: text.into(),
+        continues: false,
+    };
+    if let Some(line) = lyrics.lines.get_mut(7) {
+        line.syllables = [
+            (85_500, 85_950, "And "),
+            (85_950, 86_500, "there's "),
+            (86_500, 88_200, "nowhere "),
+            (88_200, 88_500, "I "),
+            (88_500, 89_200, "would "),
+            (89_200, 90_100, "rather "),
+            (90_100, 90_800, "be"),
+        ]
+        .into_iter()
+        .map(|(at_ms, end_ms, text)| timing(at_ms, end_ms, text))
+        .collect();
+    }
+    if let Some(line) = lyrics.lines.get_mut(8) {
+        line.syllables = [
+            (92_000, 93_200, "Coffee "),
+            (93_200, 94_400, "going "),
+            (94_400, 95_500, "cold "),
+            (95_500, 96_100, "in "),
+            (96_100, 96_700, "the "),
+            (96_700, 97_500, "cup "),
+            (97_500, 98_500, "holder"),
+        ]
+        .into_iter()
+        .map(|(at_ms, end_ms, text)| timing(at_ms, end_ms, text))
+        .collect();
+    }
+    lyrics
 }
 
 /// Invented friends for `--demo-show friends`: one listening now, long
@@ -1351,6 +1507,99 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
                 app.library.filter = "No matching playlist".into();
             }
             "queue" => app.show_queue_panel = true,
+            // The Now playing column with its lyric preview. The timed words
+            // put the shot inside a held syllable so the bounce is visible.
+            "now-playing" | "now-playing-light" => {
+                if surface == "now-playing-light" {
+                    app.settings.theme = crate::settings::ThemeChoice::Light;
+                    app.actions.push(Action::SettingsChanged);
+                }
+                app.show_now_playing_panel = true;
+                app.show_queue_panel = false;
+                app.show_lyrics_panel = false;
+                app.show_friends_panel = false;
+                app.spicy_lyrics = false;
+                app.lyrics_uri = app.now_playing().map(|now| now.uri);
+                app.lyrics = Loadable::Loaded(Some(sample_lyrics_with_words()));
+                app.lyrics_following = true;
+                app.local.position_ms = 87_000;
+                if let Some(remote) = app.remote.as_mut() {
+                    remote.state.progress_ms = Some(87_000);
+                    remote.received_at = std::time::Instant::now();
+                }
+            }
+            // The two floating Lucid columns, for theme comparisons.
+            "lucid-now-playing"
+            | "lucid-now-playing-empty"
+            | "lucid-paused"
+            | "lucid-spicy"
+            | "corrupt-art" => {
+                app.settings.theme = crate::settings::ThemeChoice::Lucid;
+                app.settings.custom_theme = None;
+                app.settings.sidebar_width = 104.0;
+                app.actions.push(Action::SettingsChanged);
+                // The demo backend never reads cover bytes, so give the glass
+                // the accent the generated cover would have had.
+                if let Some(url) = app
+                    .now_playing()
+                    .and_then(|now| now.art_small.or(now.art_url))
+                {
+                    app.accents
+                        .insert(url, egui::Color32::from_rgb(0x2b, 0x8f, 0x88));
+                }
+                // The page's own cover seeds Lucid's palette, as it would once
+                // the accent read returns in a real session.
+                if let Some(url) = crate::ui::page_art(app, 64) {
+                    app.accents
+                        .entry(url)
+                        .or_insert(egui::Color32::from_rgb(0x5b, 0x2e, 0xa6));
+                }
+                if surface.starts_with("lucid-now-playing")
+                    || surface == "lucid-paused"
+                    || surface == "corrupt-art"
+                {
+                    if surface.ends_with("empty") {
+                        app.remote = None;
+                        app.local = Default::default();
+                        app.local_ready = false;
+                    }
+                    app.open(Page::Home);
+                    app.show_now_playing_panel = true;
+                    app.show_queue_panel = false;
+                    app.show_lyrics_panel = false;
+                    app.show_friends_panel = false;
+                    app.spicy_lyrics = false;
+                    app.lyrics_uri = app.now_playing().map(|now| now.uri);
+                    app.lyrics = Loadable::Loaded(Some(sample_lyrics_with_words()));
+                    app.lyrics_following = true;
+                    app.local.position_ms = 87_000;
+                    if surface == "lucid-paused" {
+                        app.local.playback = crate::player::Playback::Paused;
+                    }
+                    if let Some(remote) = app.remote.as_mut() {
+                        remote.state.progress_ms = Some(87_000);
+                        remote.state.is_playing = surface != "lucid-paused";
+                        remote.received_at = std::time::Instant::now();
+                    }
+                    if surface == "corrupt-art"
+                        && let Some(remote) = app.remote.as_mut()
+                        && let Some(PlayableItem::Track(track)) = &mut remote.state.item
+                        && let Some(album) = &mut track.album
+                    {
+                        album.images = vec![Image {
+                            url: DEMO_CORRUPT_ART.into(),
+                            width: Some(640),
+                            height: Some(640),
+                        }];
+                    }
+                } else {
+                    app.spicy_lyrics = true;
+                    app.show_now_playing_panel = false;
+                    app.lyrics_uri = app.now_playing().map(|now| now.uri);
+                    app.lyrics_following = true;
+                    app.lyrics = Loadable::Loaded(Some(sample_lyrics_with_words()));
+                }
+            }
             "friends" => {
                 app.show_friends_panel = true;
                 app.friends = Loadable::Loaded(demo_friends());
@@ -1393,6 +1642,17 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
             "signed-out" => {
                 app.auth = AuthStatus::SignedOut;
                 app.user = None;
+            }
+            "lucid-signed-out" | "lucid-light-signed-out" => {
+                app.auth = AuthStatus::SignedOut;
+                app.user = None;
+                app.settings.theme = crate::settings::ThemeChoice::Lucid;
+                app.settings.custom_theme = None;
+                #[cfg(target_os = "linux")]
+                if surface == "lucid-light-signed-out" {
+                    app.system_appearance = Some(crate::appearance::SystemAppearance::fixed(false));
+                }
+                app.actions.push(Action::SettingsChanged);
             }
             "connecting" => {
                 app.auth = AuthStatus::Connecting;
@@ -1636,9 +1896,127 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
                 app.settings.theme = crate::settings::ThemeChoice::Light;
                 app.actions.push(Action::SettingsChanged);
             }
+            "lucid" | "lucid-light" | "lucid-dark" | "lucid-expanded" | "lucid-lyrics"
+            | "lucid-friends" => {
+                app.settings.theme = crate::settings::ThemeChoice::Lucid;
+                app.settings.custom_theme = None;
+                app.settings.lucid_background = if surface == "lucid-dark" {
+                    crate::settings::LucidBackground::Dark
+                } else {
+                    crate::settings::LucidBackground::Cover
+                };
+                if let Some(url) = app
+                    .now_playing()
+                    .and_then(|now| now.art_small.or(now.art_url))
+                {
+                    app.accents
+                        .insert(url, egui::Color32::from_rgb(0x2b, 0x8f, 0x88));
+                }
+                app.settings.sidebar_width = if surface == "lucid-expanded" {
+                    280.0
+                } else {
+                    104.0
+                };
+                app.settings.art_expanded = surface == "lucid-expanded";
+                if let Some(url) = crate::ui::page_art(app, 64) {
+                    app.accents
+                        .entry(url)
+                        .or_insert(egui::Color32::from_rgb(0x5b, 0x2e, 0xa6));
+                }
+                if surface == "lucid-lyrics" {
+                    app.show_lyrics_panel = true;
+                    app.show_now_playing_panel = false;
+                    app.show_queue_panel = false;
+                    app.spicy_lyrics = false;
+                    app.lyrics_uri = app.now_playing().map(|now| now.uri);
+                    app.lyrics = Loadable::Loaded(Some(sample_lyrics()));
+                    app.lyrics_following = true;
+                }
+                if surface == "lucid-friends" {
+                    app.show_friends_panel = true;
+                    app.show_now_playing_panel = false;
+                    app.show_queue_panel = false;
+                    app.show_lyrics_panel = false;
+                    app.friends = Loadable::Loaded(demo_friends());
+                }
+                #[cfg(target_os = "linux")]
+                if surface == "lucid-light" {
+                    app.system_appearance = Some(crate::appearance::SystemAppearance::fixed(false));
+                }
+                app.actions.push(Action::SettingsChanged);
+            }
+            // The animated lyrics column beside the page. `-timed` carries
+            // real word timings for the character animation; `-fullscreen`
+            // opens the full screen view in the demo window.
+            "spicy-lyrics"
+            | "spicy-lyrics-timed"
+            | "spicy-lyrics-unsynced"
+            | "spicy-lyrics-empty"
+            | "spicy-lyrics-fullscreen"
+            | "spicy-lyrics-fullscreen-timed"
+            | "spicy-lyrics-fullscreen-empty" => {
+                app.spicy_lyrics = true;
+                app.show_lyrics_panel = false;
+                app.show_queue_panel = false;
+                app.show_friends_panel = false;
+                app.lyrics_uri = app.now_playing().map(|now| now.uri);
+                app.lyrics_following = true;
+                let timed =
+                    surface == "spicy-lyrics-timed" || surface == "spicy-lyrics-fullscreen-timed";
+                let unsynced = surface == "spicy-lyrics-unsynced";
+                let empty = surface.ends_with("-empty");
+                let mut lyrics = if timed {
+                    sample_lyrics_with_words()
+                } else {
+                    sample_lyrics()
+                };
+                lyrics.synced = !unsynced;
+                // The provider credit Spicy's API requires, shown in the
+                // masthead and at the end of the words.
+                lyrics.attribution = Some(crate::lyrics::Attribution {
+                    provider: "Spicy Lyrics".into(),
+                    provider_url: Some("https://spicylyrics.org/".into()),
+                    uploader: None,
+                    maker: None,
+                });
+                app.lyrics = if empty {
+                    Loadable::Loaded(None)
+                } else {
+                    Loadable::Loaded(Some(lyrics))
+                };
+                if surface.contains("fullscreen") {
+                    app.lyrics_fullscreen = Some(false);
+                }
+                if timed {
+                    // Inside the timed line's held word, so a shot lands
+                    // between its letters instead of after them.
+                    app.local.position_ms = 87_000;
+                    if let Some(remote) = app.remote.as_mut() {
+                        remote.state.progress_ms = Some(87_000);
+                        remote.received_at = std::time::Instant::now();
+                    }
+                }
+            }
             "dark" => {
                 app.settings.theme = crate::settings::ThemeChoice::Dark;
                 app.actions.push(Action::SettingsChanged);
+            }
+            // The Lucid and Spicy Lyrics settings sections.
+            "settings-lucid" | "settings-lucid-light" => {
+                app.settings.theme = crate::settings::ThemeChoice::Lucid;
+                app.settings.custom_theme = None;
+                app.settings.sidebar_width = 104.0;
+                app.open(Page::Settings);
+                app.winamp.demo_settings_filter = Some("Lucid".into());
+                #[cfg(target_os = "linux")]
+                if surface == "settings-lucid-light" {
+                    app.system_appearance = Some(crate::appearance::SystemAppearance::fixed(false));
+                }
+                app.actions.push(Action::SettingsChanged);
+            }
+            "settings-spicy" => {
+                app.open(Page::Settings);
+                app.winamp.demo_settings_filter = Some("Spicy".into());
             }
             // Settings filtered down to the skin cards.
             "settings-skins" => {
@@ -1646,6 +2024,9 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
             }
             "settings-player-skins" => {
                 app.winamp.demo_settings_filter = Some("Windows Media Player".into());
+            }
+            "settings-lyrics" => {
+                app.winamp.demo_settings_filter = Some("Lyrics".into());
             }
             // Follow system on a desktop fixed light or dark (Linux), for
             // shots of the light and dark mode themes.
@@ -2043,6 +2424,24 @@ mod tests {
         (ctx, app)
     }
 
+    /// Lucid pages without artwork (Home, Search) leave the playing song's
+    /// backdrop alone instead of clearing and re-blurring it every frame.
+    #[test]
+    fn lucid_home_keeps_the_backdrop_it_is_showing() {
+        let (ctx, mut app) = accessible_app("lucid-home-backdrop");
+        app.settings.theme = crate::settings::ThemeChoice::Lucid;
+        app.actions.push(Action::SettingsChanged);
+        app.open(Page::Home);
+        for _ in 0..3 {
+            frame(&ctx, &mut app);
+        }
+        assert!(
+            app.lyrics_backdrop.is_showing(),
+            "the playing cover's backdrop survives Home's frames"
+        );
+        app.backend.shutdown();
+    }
+
     /// #576: the Library heading never runs under the header's buttons. It
     /// shrinks a little for a long translation and gives way entirely in
     /// the narrowest sidebar, but stays where there is room.
@@ -2270,6 +2669,497 @@ mod tests {
             playing_before,
             "opening the countdown does not play"
         );
+        app.backend.shutdown();
+    }
+
+    /// The Lucid Now Playing column is a live client: its title, artist,
+    /// heart and queue controls act, not only draw.
+    #[test]
+    fn lucid_now_playing_links_and_controls_act() {
+        use egui::accesskit::{Action as AccessibleAction, Role};
+        let (ctx, mut app) = accessible_app("lucid-now-playing-live");
+        app.settings.theme = crate::settings::ThemeChoice::Lucid;
+        app.settings.sidebar_width = 104.0;
+        app.show_now_playing_panel = true;
+        app.show_queue_panel = false;
+        app.actions.push(Action::SettingsChanged);
+        for _ in 0..3 {
+            let _ = accessible_frame_height(&ctx, &mut app, vec![], 1200.0);
+        }
+        let tree = accessible_frame_height(&ctx, &mut app, vec![], 1200.0);
+        assert_eq!(app.settings.queue_width, 416.0, "the Lucid column width");
+        let title = accessible_node(&tree, "Rosewood", Role::Link);
+        accessible_frame_height(
+            &ctx,
+            &mut app,
+            vec![accessible_action(title, AccessibleAction::Click, None)],
+            1200.0,
+        );
+        assert!(
+            matches!(app.page(), Page::Album(id) if id == "alb0"),
+            "the title opens its album, got {:?}",
+            app.page()
+        );
+        let tree = accessible_frame_height(&ctx, &mut app, vec![], 1200.0);
+        let artist = tree
+            .nodes
+            .iter()
+            .find(|(_, node)| {
+                node.role() == Role::Link
+                    && node.label() == Some("Bonobo")
+                    && node.bounds().is_some_and(|rect| rect.x0 > 800.0)
+            })
+            .expect("the artist link in the Now Playing column")
+            .0;
+        accessible_frame_height(
+            &ctx,
+            &mut app,
+            vec![accessible_action(artist, AccessibleAction::Click, None)],
+            1200.0,
+        );
+        assert!(
+            matches!(app.page(), Page::Artist(id) if id == "art0"),
+            "the artist opens the artist page, got {:?}",
+            app.page()
+        );
+        let uri = app.now_playing().unwrap().uri;
+        let liked = app.is_saved(&uri).unwrap_or(false);
+        let tree = accessible_frame_height(&ctx, &mut app, vec![], 1200.0);
+        let heart_label = if liked {
+            "Remove from Liked Songs"
+        } else {
+            "Save to Liked Songs"
+        };
+        let heart = accessible_node(&tree, heart_label, Role::Button);
+        accessible_frame_height(
+            &ctx,
+            &mut app,
+            vec![accessible_action(heart, AccessibleAction::Click, None)],
+            1200.0,
+        );
+        assert_eq!(
+            app.is_saved(&uri),
+            Some(!liked),
+            "the heart toggles the saved state"
+        );
+        let before = app.manual_queue.len();
+        let tree = accessible_frame_height(&ctx, &mut app, vec![], 1200.0);
+        let add = accessible_node(&tree, "Add to queue", Role::Button);
+        accessible_frame_height(
+            &ctx,
+            &mut app,
+            vec![accessible_action(add, AccessibleAction::Click, None)],
+            1200.0,
+        );
+        assert_eq!(
+            app.manual_queue.len(),
+            before + 1,
+            "add to queue appends once"
+        );
+        let tree = accessible_frame_height(&ctx, &mut app, vec![], 1200.0);
+        let queue = accessible_node(&tree, "Queue", Role::Button);
+        accessible_frame_height(
+            &ctx,
+            &mut app,
+            vec![accessible_action(queue, AccessibleAction::Click, None)],
+            1200.0,
+        );
+        assert!(app.show_queue_panel && !app.show_now_playing_panel);
+        let tree = accessible_frame_height(&ctx, &mut app, vec![], 1200.0);
+        let close = accessible_node(&tree, "Close", Role::Button);
+        accessible_frame_height(
+            &ctx,
+            &mut app,
+            vec![accessible_action(close, AccessibleAction::Click, None)],
+            1200.0,
+        );
+        assert!(!app.show_queue_panel, "the close control hides the column");
+        app.backend.shutdown();
+    }
+
+    /// The Now Playing column carries a compact Spicy Lyrics block between
+    /// the song's controls and the queue: eight lines, the sung one marked,
+    /// Lucid takes the viewed page's cover into its palette, so the columns,
+    /// the search field and both bars follow that cover.
+    #[cfg(feature = "demo")]
+    #[test]
+    fn lucid_palette_follows_the_page_cover() {
+        let (ctx, mut app) = accessible_app("lucid-page-tint");
+        apply_flags(&mut app, Some("playlist:pl1"), Some("lucid-lyrics"));
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 900.0),
+                )),
+                ..Default::default()
+            },
+            |ui| app.frame_ui(ui),
+        );
+        output.textures_delta.clear();
+        let plain = crate::theme::lucid::palette(true);
+        assert_ne!(app.palette.panel, plain.panel, "the cover casts the panel");
+        assert!(
+            app.palette.panel.b() > app.palette.panel.g(),
+            "the playlist's purple cover reaches the panel: {:?}",
+            app.palette.panel
+        );
+    }
+
+    /// Turning the panels' cover colours off leaves Lucid on its own seed and
+    /// stops the bars taking the album's colour.
+    #[cfg(feature = "demo")]
+    #[test]
+    fn lucid_cover_colours_can_be_switched_off() {
+        let (ctx, mut app) = accessible_app("lucid-no-cover-colours");
+        apply_flags(&mut app, None, Some("lucid-now-playing"));
+        app.settings.lucid_cover_tint = false;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 1000.0),
+                )),
+                ..Default::default()
+            },
+            |ui| app.frame_ui(ui),
+        );
+        output.textures_delta.clear();
+        assert_eq!(app.palette.panel, crate::theme::lucid::palette(true).panel);
+        assert!(app.now_playing_tint().is_none(), "the bars keep the theme");
+    }
+
+    /// and a way into the full view.
+    #[cfg(feature = "demo")]
+    #[test]
+    fn now_playing_carries_a_compact_spicy_lyrics_block() {
+        use egui::accesskit::{Action as AccessibleAction, Role};
+        let (ctx, mut app) = accessible_app("now-playing-spicy-preview");
+        apply_flags(&mut app, None, Some("lucid-now-playing"));
+        let mut text = Vec::new();
+        let mut tree = None;
+        for frame in 0..20 {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1000.0, 1200.0),
+                    )),
+                    time: Some(f64::from(frame) / 30.0),
+                    ..Default::default()
+                },
+                |ui| app.frame_ui(ui),
+            );
+            output.textures_delta.clear();
+            fn collect(shape: &egui::epaint::Shape, out: &mut Vec<(String, egui::Rect)>) {
+                match shape {
+                    egui::epaint::Shape::Text(text) => out.push((
+                        text.galley.job.text.clone(),
+                        text.galley.rect.translate(text.pos.to_vec2()),
+                    )),
+                    egui::epaint::Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, out)),
+                    _ => {}
+                }
+            }
+            text.clear();
+            output
+                .shapes
+                .iter()
+                .for_each(|s| collect(&s.shape, &mut text));
+            tree = output.platform_output.accesskit_update;
+        }
+        let lyrics = sample_lyrics_with_words();
+        // Only the column's copies, so the same line in a hidden surface does
+        // not count twice. The Spicy renderer draws each word (or letter) as
+        // its own shape, so lines are counted by the rows their words land on.
+        let words: std::collections::HashSet<&str> = lyrics
+            .lines
+            .iter()
+            .flat_map(|line| line.text.split_whitespace())
+            .collect();
+        let mut rows: Vec<i32> = text
+            .iter()
+            .filter(|(word, rect)| rect.left() > 600.0 && words.contains(word.as_str()))
+            .map(|(_, rect)| rect.center().y.round() as i32)
+            .collect();
+        rows.sort_unstable();
+        rows.dedup();
+        assert!(
+            rows.len() >= 5,
+            "the block shows the sung window, found {} rows",
+            rows.len()
+        );
+        assert!(text.iter().any(|(line, _)| line == "Spicy Lyrics"));
+        let tree = tree.expect("an accessible tree");
+        let button = accessible_node(&tree, "Full screen lyrics", Role::Button);
+        accessible_frame_height(
+            &ctx,
+            &mut app,
+            vec![accessible_action(button, AccessibleAction::Click, None)],
+            1200.0,
+        );
+        assert!(
+            app.lyrics_fullscreen.is_some(),
+            "the block's expand control opens the full view"
+        );
+
+        // Turning the block off stops drawing its lines.
+        app.lyrics_fullscreen = None;
+        app.settings.spicy_now_playing = false;
+        let mut remaining = Vec::new();
+        for frame in 0..3 {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1000.0, 1200.0),
+                    )),
+                    time: Some(1.0 + f64::from(frame) / 30.0),
+                    ..Default::default()
+                },
+                |ui| app.frame_ui(ui),
+            );
+            output.textures_delta.clear();
+            fn collect(shape: &egui::epaint::Shape, out: &mut Vec<String>) {
+                match shape {
+                    egui::epaint::Shape::Text(text) => out.push(text.galley.job.text.clone()),
+                    egui::epaint::Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, out)),
+                    _ => {}
+                }
+            }
+            remaining.clear();
+            output
+                .shapes
+                .iter()
+                .for_each(|s| collect(&s.shape, &mut remaining));
+        }
+        assert!(
+            !remaining.iter().any(|line| line == "Spicy Lyrics"),
+            "the block is gone when its setting is off"
+        );
+        app.backend.shutdown();
+    }
+
+    /// Pausing and resuming the same song leaves a closed column closed, so
+    /// closing it is not undone by pressing play again.
+    #[cfg(feature = "demo")]
+    #[test]
+    fn resuming_from_pause_keeps_the_now_playing_column_closed() {
+        use crate::player::Playback;
+        let (ctx, mut app) = accessible_app("resume-keeps-column-closed");
+        apply_flags(&mut app, None, Some("home"));
+        play_here(&mut app);
+        app.local.playback = Playback::Paused;
+        run_demo_frame(&ctx, &mut app, 0.0);
+        app.local.playback = Playback::Playing;
+        run_demo_frame(&ctx, &mut app, 0.1);
+        assert!(
+            !app.show_now_playing_panel,
+            "the first play records the song without opening the column"
+        );
+        app.show_now_playing_panel = false;
+        app.local.playback = Playback::Paused;
+        run_demo_frame(&ctx, &mut app, 0.2);
+        app.local.playback = Playback::Playing;
+        run_demo_frame(&ctx, &mut app, 0.3);
+        assert!(
+            !app.show_now_playing_panel,
+            "resuming the same song does not reopen the column"
+        );
+        app.backend.shutdown();
+    }
+
+    /// A different song starting brings up Spicetify's Now playing view.
+    #[cfg(feature = "demo")]
+    #[test]
+    fn a_different_song_opens_the_now_playing_column() {
+        use crate::player::Playback;
+        let (ctx, mut app) = accessible_app("new-song-opens-column");
+        apply_flags(&mut app, None, Some("home"));
+        play_here(&mut app);
+        app.local.playback = Playback::Paused;
+        run_demo_frame(&ctx, &mut app, 0.0);
+        app.local.playback = Playback::Playing;
+        run_demo_frame(&ctx, &mut app, 0.1);
+        assert!(
+            !app.show_now_playing_panel,
+            "the song that was already selected does not open it"
+        );
+        if let Some(track) = app.local.track.as_mut() {
+            track.uri = "spotify:track:trk2".into();
+        }
+        run_demo_frame(&ctx, &mut app, 0.2);
+        assert!(
+            app.show_now_playing_panel,
+            "a different song opens the column"
+        );
+        app.backend.shutdown();
+    }
+
+    /// The column the user already opened wins over the automatic one, even
+    /// when a different song starts.
+    #[cfg(feature = "demo")]
+    #[test]
+    fn a_new_song_keeps_an_open_column() {
+        use crate::player::Playback;
+        let (ctx, mut app) = accessible_app("auto-now-playing-keeps-column");
+        apply_flags(&mut app, None, Some("home"));
+        play_here(&mut app);
+        app.show_queue_panel = true;
+        app.local.playback = Playback::Paused;
+        run_demo_frame(&ctx, &mut app, 0.0);
+        if let Some(track) = app.local.track.as_mut() {
+            track.uri = "spotify:track:trk2".into();
+        }
+        app.local.playback = Playback::Playing;
+        run_demo_frame(&ctx, &mut app, 0.1);
+        assert!(app.show_queue_panel, "the queue stays open");
+        assert!(!app.show_now_playing_panel, "no column is taken over");
+        app.backend.shutdown();
+    }
+
+    /// One frame of the demo app at a phone-sized desktop window.
+    #[cfg(feature = "demo")]
+    fn run_demo_frame(ctx: &egui::Context, app: &mut App, time: f64) {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 900.0),
+                )),
+                time: Some(time),
+                ..Default::default()
+            },
+            |ui| app.frame_ui(ui),
+        );
+        output.textures_delta.clear();
+    }
+
+    /// Lucid's floating player card holds its whole transport. The panel was
+    /// asked for the card's height alone, which counts the gap under it and
+    /// its hairline too, so the card kept 54 points of content for a 64 point
+    /// transport and clipped the play disc at the top.
+    #[test]
+    fn lucid_player_card_holds_its_whole_transport() {
+        let (ctx, mut app) = accessible_app("lucid-player-card-fits");
+        app.settings.theme = crate::settings::ThemeChoice::Lucid;
+        app.actions.push(Action::SettingsChanged);
+        let mut time = 0.0;
+        let mut disc = None;
+        for _ in 0..4 {
+            time += 1.0;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1280.0, 800.0),
+                    )),
+                    time: Some(time),
+                    ..Default::default()
+                },
+                |ui| app.frame_ui(ui),
+            );
+            output.textures_delta.clear();
+            // The disc is the widest filled circle the bar paints. Its clip
+            // rect is the card's visible edge, so the pair says whether the
+            // card cut it off.
+            fn circles(shape: &egui::epaint::Shape, found: &mut Vec<(egui::Rect, egui::Rect)>) {
+                match shape {
+                    egui::epaint::Shape::Circle(circle) => found.push((
+                        egui::Rect::from_center_size(
+                            circle.center,
+                            egui::Vec2::splat(circle.radius * 2.0),
+                        ),
+                        egui::Rect::NOTHING,
+                    )),
+                    egui::epaint::Shape::Vec(shapes) => {
+                        shapes.iter().for_each(|shape| circles(shape, found));
+                    }
+                    _ => {}
+                }
+            }
+            let mut found = Vec::new();
+            for clipped in &output.shapes {
+                let start = found.len();
+                circles(&clipped.shape, &mut found);
+                for entry in &mut found[start..] {
+                    entry.1 = clipped.clip_rect;
+                }
+            }
+            let biggest = found
+                .into_iter()
+                .max_by(|a, b| a.0.width().total_cmp(&b.0.width()))
+                .expect("the play disc is painted");
+            disc.get_or_insert(biggest);
+        }
+        let (disc, clip) = disc.unwrap();
+        assert!(
+            disc.height() >= 45.0,
+            "the play disc is a whole disc, got {disc:?}"
+        );
+        assert!(
+            clip.contains_rect(disc),
+            "the play disc {disc:?} is cut off by the card's edge {clip:?}"
+        );
+        app.backend.shutdown();
+    }
+
+    /// The player-bar control is a real way into Now Playing, not only a
+    /// highlighted icon next to the queue.
+    #[test]
+    fn player_bar_now_playing_control_opens_the_column() {
+        use egui::accesskit::{Action as AccessibleAction, Role};
+        let (ctx, mut app) = accessible_app("player-bar-now-playing");
+        app.show_now_playing_panel = false;
+        app.show_queue_panel = false;
+        app.actions.push(Action::SettingsChanged);
+        let tree = accessible_frame(&ctx, &mut app, vec![]);
+        let control = accessible_node(&tree, "Now playing", Role::Button);
+        accessible_frame(
+            &ctx,
+            &mut app,
+            vec![accessible_action(control, AccessibleAction::Click, None)],
+        );
+        assert!(app.show_now_playing_panel);
+        app.backend.shutdown();
+    }
+
+    /// Leaving Lucid and returning restores the rail, the floating column
+    /// width and the light or dark appearance, rather than keeping a mix of
+    /// the two theme's geometry.
+    #[test]
+    fn lucid_theme_round_trip_restores_its_geometry() {
+        let (ctx, mut app) = accessible_app("lucid-round-trip");
+        app.settings.sidebar_width = 250.0;
+        app.settings.theme = crate::settings::ThemeChoice::Dark;
+        app.apply(Action::SetTheme(crate::settings::ThemeChoice::Lucid), &ctx);
+        assert_eq!(app.settings.sidebar_width, 104.0, "Lucid opens the rail");
+        app.apply(Action::SetTheme(crate::settings::ThemeChoice::Dark), &ctx);
+        assert_eq!(
+            app.settings.sidebar_width, 250.0,
+            "leaving restores the library"
+        );
+        app.apply(Action::SetTheme(crate::settings::ThemeChoice::Lucid), &ctx);
+        assert_eq!(
+            app.settings.sidebar_width, 104.0,
+            "returning restores the rail"
+        );
+        app.show_now_playing_panel = true;
+        app.show_queue_panel = false;
+        for _ in 0..3 {
+            let _ = accessible_frame_height(&ctx, &mut app, vec![], 1200.0);
+        }
+        assert_eq!(app.settings.queue_width, 416.0, "the Lucid column width");
+        app.apply(Action::SetTheme(crate::settings::ThemeChoice::Dark), &ctx);
+        app.apply(Action::SetTheme(crate::settings::ThemeChoice::Lucid), &ctx);
+        assert_eq!(app.settings.sidebar_width, 104.0);
+        assert_eq!(app.settings.queue_width, 416.0);
+        app.system_appearance = Some(crate::appearance::SystemAppearance::fixed(false));
+        let _ = accessible_frame_height(&ctx, &mut app, vec![], 1200.0);
+        assert!(!app.palette.dark, "Lucid light follows the desktop");
+        app.system_appearance = Some(crate::appearance::SystemAppearance::fixed(true));
+        let _ = accessible_frame_height(&ctx, &mut app, vec![], 1200.0);
+        assert!(app.palette.dark, "Lucid dark follows the desktop");
         app.backend.shutdown();
     }
 
@@ -8698,10 +9588,11 @@ mod tests {
         // Read labels from the real Settings page.
         let drawn = |app: &mut App, ctx: &egui::Context| -> Vec<String> {
             let input = egui::RawInput {
-                // Draw the full Settings page, including MilkDrop.
+                // Draw the full Settings page, including MilkDrop. The page is
+                // taller than 4000 points once every section is open.
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
-                    egui::vec2(1280.0, 4000.0),
+                    egui::vec2(1280.0, 7000.0),
                 )),
                 ..Default::default()
             };
@@ -9100,6 +9991,47 @@ mod tests {
             );
             app.backend.shutdown();
         }
+    }
+
+    /// An inactive lyric line is drawn once per word, however far behind the
+    /// active line it sits: the depth of field is carried by its opacity, not
+    /// by repeated glyphs that would read as a halo and multiply the draws.
+    #[cfg(feature = "demo")]
+    #[test]
+    fn an_inactive_lyric_line_is_drawn_once_per_word() {
+        let (ctx, mut app) = accessible_app("spicy-line-draws");
+        apply_flags(&mut app, None, Some("spicy-lyrics"));
+        let mut output = None;
+        for frame in 0..30 {
+            let mut run = ctx.run_ui(
+                egui::RawInput {
+                    time: Some(f64::from(frame) / 30.0),
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| app.frame_ui(ui),
+            );
+            run.textures_delta.clear();
+            output = Some(run);
+        }
+        let output = output.expect("a frame");
+        // A word from a line well before the sung one, so it is at full depth.
+        let drawn = output
+            .shapes
+            .iter()
+            .filter(|shape| {
+                matches!(&shape.shape, egui::Shape::Text(text)
+                    if text.galley.job.text == "radio")
+            })
+            .count();
+        assert_eq!(
+            drawn, 1,
+            "an inactive word is drawn once, not once per blur sample"
+        );
+        app.backend.shutdown();
     }
 
     /// Full screen puts the cover and the lyrics side by side as one centred
@@ -13225,7 +14157,7 @@ mod tests {
             let Some(Dialog::CoverArt { url, title, .. }) = &app.dialog else {
                 panic!("the cover opens enlarged: {:?}", app.dialog);
             };
-            assert!(url.ends_with("/640/640"), "the largest artwork: {url}");
+            assert_eq!(url, DEMO_ALT_ART, "the largest fixture artwork");
             assert_eq!(title, "Late night focus");
             // The modal's first frame only measures it.
             accessible_frame(ctx, app, vec![]);

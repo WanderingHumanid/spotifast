@@ -54,6 +54,14 @@ Spotifast connects only to the services below.
   service, which answers with the account's feed of new releases; when it
   cannot, the Web API is asked for the followed artists and their latest
   albums. The shelf is saved in the same Home cache.
+- **Spicy Lyrics (optional).** When word-level lyric timings are turned on in
+  Settings and a key is saved, Spotifast asks
+  [api.spicylyrics.org](https://developers.spicylyrics.org/) for the playing
+  track's timings before its other lyrics sources. The request carries the
+  Spotify track id and your key, and no account information. The words show
+  the provider, and for community syncs their uploader and maker, as the API
+  requires. The key stays in a private state file, never in `settings.json`
+  or the log; removing it in Settings stops the requests.
 - **LRCLIB.** When the lyrics panel is open and neither Spotify nor, for a
   local file, the file itself has lyrics for the song, Spotifast sends its
   artist, title, album and length to [lrclib.net](https://lrclib.net).

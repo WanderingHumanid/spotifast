@@ -619,9 +619,9 @@ Spotifast on Windows, macOS, or X11 again.
 Since 0.8.0, the top bar reserves room for the device and update
 badges beside Search. In narrow windows those badges show only their icons.
 The bar stays above the page. Library, Queue and Lyrics keep their full height.
-When the window narrows, Library, Queue and Lyrics give up width before the
+When the window narrows, Library, Queue, Now playing and Lyrics give up width before the
 top bar runs out of room, and return to the widths you chose once it widens.
-With Queue or Lyrics open, the window cannot be made narrower than the room
+With Queue, Now playing or Lyrics open, the window cannot be made narrower than the room
 they need beside the page.
 Hover to read the device name or available version; click to open the device
 picker or update window.
@@ -823,6 +823,82 @@ beside it, or in its own tags, and the cover in its tags; otherwise lyrics come
 from LRCLIB by its artist, title, album and length.
 Synced lyrics follow the playing line automatically. Scroll to pause following,
 choose **Follow** to resume it, or choose a line to jump to that part of the song.
+
+The sparkles button beside the microphone, in the player bar, opens **Spicy
+Lyrics** in the right column, beside the page, as the extension sits in the
+Spotify client. The page keeps its place. The expand button in the column,
+**F**, or the player bar's expand button goes full screen; **Esc** or the
+shrink button returns to the column, and the close button closes it.
+
+A word held for at least a second splits into letters, and each letter swells,
+lifts and glows as it is sung. Damped springs chase Spicy Lyrics' own scale,
+lift and glow curves, and the active letter pulls its neighbours with a
+distance wave, the motion Spicy Lyrics uses in the Spotify client. Each word
+fills from left to right as it is sung, while the words around it stay dimmer,
+and the active line stays centred in the column. The fill edge is a soft band
+rather than a hard cut, lines further from the active one fade back the way
+the extension's depth of field sets them back, and the column keeps the
+extension's brighter upcoming lines and deeper faded ones. Pointing at a line
+brings it forward behind a rounded highlight, and a static song uses the
+smaller, lighter text the extension gives untimed lyrics. Those letter timings
+appear
+only when the lyrics actually carry word or syllable timings: Spotify's colour
+lyrics when it supplies syllables, or an enhanced LRC file with word stamps.
+Spotify and LRCLIB usually time whole lines only, so a line-synced song fills
+from top to bottom and carries a line-wide glow at its own pace, without
+invented word or letter times. A click on a line jumps there, and scrolling by
+hand pauses following. The view asks for frames only while the song plays.
+
+For character-synced words on songs that ordinary lyrics time only by line,
+turn on **Settings > Lyrics > Word-level timings** and paste a free secret key
+from [developers.spicylyrics.org](https://developers.spicylyrics.org/).
+Spotifast then asks the Spicy Lyrics catalogue before its other lyrics sources
+and uses an answer only when it carries word timings, with the required
+attribution at the end of the words. The key stays in a private file on this
+computer, not in settings, and **Remove key** clears it.
+
+## Now playing
+
+The sound-wave button in the player bar, beside Spicy Lyrics, opens the **Now
+playing** column. It takes the right column and shows the song and its cover,
+a short live piece of Spicy Lyrics, the artist, their popular songs, related
+artists, and the credits Spotifast knows. A different song starting opens the
+column on its own; resuming the same song after a pause leaves it as you left
+it, and a queue, lyrics or friend activity column you already have open is
+left alone. The expand button opens Spicy Lyrics in the column, and the close
+button closes the panel.
+
+Between the song's likes and queue controls and **Next in queue**, the column
+carries a compact Spicy Lyrics block: five lines around the sung one, drawn by
+the same renderer as the full view, with words filling as they are sung, the
+same letter swell and glow on the active line, and the same depth dimming on
+the lines around it. Choose a line to jump there, or its expand button to open
+the full view. **Settings > Spicy Lyrics** can hide the block, stop its animation, set
+the animation speed, turn the letter glow off, or replace the full-screen
+cover backdrop with plain black.
+
+Spotify does not give apps a biography, tour dates or composer credits, so the
+column leaves those out instead of guessing. The artist photo, followers,
+genres, popular songs and related artists come from the same reads as the
+artist page, so opening that page afterwards is instant.
+
+Under the Lucid theme, the blurred backdrop follows the playlist, album,
+artist or show you are viewing. It falls back to the playing song's cover on
+pages without artwork, and follows the song again when you leave those pages.
+The same cover colour seeds every surface Lucid builds, so the search field,
+the library, the lyrics and listening columns, the page and both bars take the
+hue of what you are looking at instead of staying on the theme's green seed.
+**Settings > Lucid** chooses the background: Cover keeps Lucid's blurred
+artwork behind the panels, with a brighter copy of the page cover glowing at
+the top of the page and fading into the rows. That glow follows the cover's
+lightness: on dark Lucid a mostly white cover dims it so the title keeps its
+contrast, while light Lucid keeps it bright for its dark text. The sign-in
+screen and the Settings sections wear the same glass as the rest of the app.
+Dark is a clean dark interface
+with no artwork, no wash and no cover colour anywhere, and its panels stay
+opaque. The glass choice (Clear, Soft or Off) and the cover colours in panels
+only apply to the Cover background; with cover colours off, the bars keep the
+theme's own colours too.
 
 The expand button in the lyrics panel or at the right of the player bar, or
 **F** when no text field has focus, opens lyrics in full screen. A narrow

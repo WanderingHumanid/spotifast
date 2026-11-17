@@ -331,6 +331,8 @@ pub fn actions_row(
 ) {
     let palette = app.palette;
     let locale = app.locale;
+    let mut filter = filter;
+    let mut filter_beside_buttons = false;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 18.0;
         if let Some(uri) = &actions.play_uri {
@@ -505,20 +507,46 @@ pub fn actions_row(
                     }
                 });
         }
-        if let Some(filter) = filter {
+        // Only share the row when the field still fits with room to
+        // breathe; otherwise it goes on its own row below.
+        if let Some(text) = filter.as_deref_mut()
+            && ui.available_width() >= 260.0
+        {
+            filter_beside_buttons = true;
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 widgets::search_field(
                     ui,
                     &palette,
                     locale,
                     egui::Id::new(("collection-filter", actions.name)),
-                    filter,
+                    text,
                     &gettext(locale, "Filter"),
                     220.0,
                 );
             });
         }
     });
+    if let Some(text) = filter
+        && !filter_beside_buttons
+    {
+        // A narrow header gives the filter its own row: beside the buttons it
+        // would crowd the wrapped byline and leave the play button no room,
+        // and the field is never wider than the page itself.
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                widgets::search_field(
+                    ui,
+                    &palette,
+                    locale,
+                    egui::Id::new(("collection-filter", actions.name)),
+                    text,
+                    &gettext(locale, "Filter"),
+                    ui.available_width().min(220.0),
+                );
+            });
+        });
+    }
     ui.add_space(14.0);
 }
 
@@ -5007,6 +5035,76 @@ mod tests {
             refresh.width() <= 320.0,
             "the menu must not stretch across the page: {}",
             refresh.width()
+        );
+    }
+
+    /// A narrow header gives the filter its own row; beside the buttons it
+    /// would crowd the wrapped title and byline, and a wide one keeps it on
+    /// the actions row at the right.
+    #[test]
+    fn a_narrow_header_gives_the_filter_its_own_row() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        theme::install(&ctx);
+        let mut app = test_app();
+        let mut frame = |width: f32| {
+            let mut filter = String::new();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(width, 420.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    actions_row(
+                        &mut app,
+                        ui,
+                        Actions {
+                            play_uri: Some("spotify:playlist:test".into()),
+                            view: Some(vec!["spotify:track:a".to_string()].into()),
+                            saved: None,
+                            saved_icons: (Icon::CirclePlus, Icon::CircleCheck),
+                            saved_tooltips: Default::default(),
+                            owned_playlist: None,
+                            reload: None,
+                            name: "Test",
+                            save_radio: None,
+                            plays_shown_rows: false,
+                        },
+                        Some(&mut filter),
+                    )
+                },
+            );
+            output.textures_delta.clear();
+            output.platform_output.accesskit_update.unwrap()
+        };
+        let bounds = |tree: &egui::accesskit::TreeUpdate, label: &str| {
+            tree.nodes
+                .iter()
+                .find(|(_, node)| node.label() == Some(label))
+                .and_then(|(_, node)| node.bounds())
+                .unwrap_or_else(|| panic!("missing {label}"))
+        };
+        frame(380.0);
+        let narrow = frame(380.0);
+        let play = bounds(&narrow, "Play");
+        let filter = bounds(&narrow, "Filter");
+        assert!(
+            filter.x0 >= 0.0 && filter.x1 <= 380.0,
+            "the filter stays inside the page: {filter:?}"
+        );
+        assert!(
+            filter.y0 >= play.y1 - 1.0,
+            "the filter belongs below the play row: play={play:?} filter={filter:?}"
+        );
+        assert!(filter.width() <= 220.0);
+
+        frame(1240.0);
+        let wide = frame(1240.0);
+        let play = bounds(&wide, "Play");
+        let filter = bounds(&wide, "Filter");
+        assert!(
+            filter.y0 < play.y1 && filter.y1 > play.y0,
+            "the wide header keeps the filter on the actions row: play={play:?} filter={filter:?}"
         );
     }
 

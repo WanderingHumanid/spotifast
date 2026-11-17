@@ -46,20 +46,39 @@ pub(crate) fn end_tint_session(ctx: &egui::Context) {
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let fill = eased_fill(ui.ctx(), palette.panel, app.now_playing_tint());
+    let frame = if super::lucid::enabled(app) {
+        super::lucid::player_frame(app).fill(super::lucid::glass(app, fill))
+    } else {
+        Frame::new()
+            .fill(fill)
+            .inner_margin(Margin::symmetric(16, 0))
+    };
+    let floating = super::lucid::enabled(app);
+    // Lucid's player is a compact floating card, not the full-height bar.
+    // Its panel size counts the card's own margins, so the card's height is
+    // asked for and the gap and hairline on top of it. A 64 point panel left
+    // the card 54 points of content, less than the transport's 64, and cut
+    // the play disc off at the top.
+    let height = if floating {
+        super::lucid::PLAYER_CARD_HEIGHT + super::lucid::card_chrome(app)
+    } else {
+        theme::PLAYER_BAR_HEIGHT
+    };
     egui::Panel::bottom("player-bar")
-        .exact_size(theme::PLAYER_BAR_HEIGHT)
+        .exact_size(height)
         .resizable(false)
         .show_separator_line(false)
-        .frame(
-            Frame::new()
-                .fill(fill)
-                .inner_margin(Margin::symmetric(16, 0)),
-        )
+        .frame(frame)
         .show(ui, |ui| {
             let rect = ui.max_rect();
             let now = app.now_playing();
-            // The whole bar, margins included, behind everything else.
-            let behind = rect.expand2(vec2(16.0, 0.0));
+            // The whole bar, margins included, behind everything else. A
+            // floating Lucid bar keeps its visualizer inside its card.
+            let behind = if floating {
+                rect
+            } else {
+                rect.expand2(vec2(16.0, 0.0))
+            };
             if visualizer(app, ui, behind, now.as_ref()) {
                 theme::visualiser_frame(ui.ctx(), app.visualiser_fps());
             }
@@ -87,11 +106,13 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     app.actions.push(Action::CyclePlayerBarVis);
                 }
             }
-            ui.painter().hline(
-                rect.x_range(),
-                rect.top() + 0.5,
-                egui::Stroke::new(1.0, palette.outline),
-            );
+            if !floating {
+                ui.painter().hline(
+                    rect.x_range(),
+                    rect.top() + 0.5,
+                    egui::Stroke::new(1.0, palette.outline),
+                );
+            }
             let width = rect.width();
             let side = (width * 0.3).clamp(200.0, 420.0);
             let cy = rect.center().y;
@@ -511,10 +532,10 @@ fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, now: Option
     let displayed_text_width: f32 = {
         let title =
             ui.painter()
-                .layout_no_wrap(now.title.clone(), theme::medium(14.0), palette.text);
+                .layout_no_wrap(now.title.clone(), theme::medium(16.0), palette.text);
         let subtitle = ui.painter().layout_no_wrap(
             now.subtitle.clone(),
-            theme::regular(12.0),
+            theme::regular(13.5),
             palette.secondary,
         );
         title.size().x.max(subtitle.size().x).min(text_width)
@@ -528,7 +549,7 @@ fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, now: Option
     );
     text_ui.set_clip_rect(info_rect.intersect(ui.clip_rect()));
     text_ui.spacing_mut().item_spacing.y = 2.0;
-    let title_response = theme::link(&mut text_ui, &now.title, theme::medium(14.0), palette.text)
+    let title_response = theme::link(&mut text_ui, &now.title, theme::medium(16.0), palette.text)
         .interact(drag_sense);
     if title_response.clicked() {
         if let Some(id) = &now.album_id {
@@ -540,7 +561,7 @@ fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, now: Option
     let mut responses = vec![cover_response, title_response];
     text_ui.horizontal_top(|ui| {
         if now.artists.is_empty() {
-            let response = theme::link(ui, &now.subtitle, theme::regular(12.0), palette.secondary)
+            let response = theme::link(ui, &now.subtitle, theme::regular(13.5), palette.secondary)
                 .interact(drag_sense);
             if response.clicked()
                 && let Some(id) = &now.show_id
@@ -552,12 +573,12 @@ fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, now: Option
             ui.spacing_mut().item_spacing.x = 0.0;
             for (index, artist) in now.artists.iter().enumerate() {
                 if index > 0 {
-                    theme::text(ui, ", ", theme::regular(12.0), palette.secondary);
+                    theme::text(ui, ", ", theme::regular(13.5), palette.secondary);
                 }
                 let response = if artist.id.is_some() {
-                    theme::link(ui, &artist.name, theme::regular(12.0), palette.secondary)
+                    theme::link(ui, &artist.name, theme::regular(13.5), palette.secondary)
                 } else {
-                    theme::text(ui, &artist.name, theme::regular(12.0), palette.secondary)
+                    theme::text(ui, &artist.name, theme::regular(13.5), palette.secondary)
                 }
                 .interact(drag_sense);
                 if response.clicked()
@@ -704,7 +725,7 @@ fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, now: Option
 
 /// The transport's button widths: icon buttons occupy icon size + 12; the
 /// disc is 36.
-const TRANSPORT_WIDTHS: [f32; 5] = [29.0, 30.0, 36.0, 30.0, 29.0];
+const TRANSPORT_WIDTHS: [f32; 5] = [29.0, 30.0, 46.0, 30.0, 29.0];
 const TRANSPORT_GAP: f32 = 10.0;
 
 /// The transport's buttons from Shuffle to Repeat, centred in the bar.
@@ -738,7 +759,7 @@ fn transport(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, region:
     let widths = TRANSPORT_WIDTHS;
     let mut x = region.center().x - transport_width() / 2.0;
     let mut slot = |width: f32| {
-        let rect = Rect::from_center_size(pos2(x + width / 2.0, cy), vec2(width, 36.0));
+        let rect = Rect::from_center_size(pos2(x + width / 2.0, cy), vec2(width, 50.0));
         x += width + TRANSPORT_GAP;
         rect
     };
@@ -795,7 +816,7 @@ fn transport(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, region:
         let mut cell = centered(ui, disc);
         theme::circle_spinner(
             &mut cell,
-            36.0,
+            46.0,
             palette.text,
             palette.window,
             &gettext(app.locale, "Loading…"),
@@ -815,7 +836,7 @@ fn transport(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, region:
         if theme::circle_button(
             &mut cell,
             icon,
-            36.0,
+            46.0,
             palette.text,
             hover,
             palette.window,
@@ -941,8 +962,9 @@ fn transport(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, region:
 }
 
 /// What the right of the bar always holds, in points: the volume slider and
-/// its button, the devices, queue and lyrics buttons, and the gaps.
-const EXTRAS_WIDTH: f32 = 92.0 + 4.0 * (18.0 + theme::ICON_BUTTON_PAD) + 4.0 * 6.0 + 4.0;
+/// its button, the devices, queue, lyrics and Spicy Lyrics buttons, and the
+/// gaps. Now playing and Listening activity yield in a narrow bar.
+const EXTRAS_WIDTH: f32 = 92.0 + 5.0 * (18.0 + theme::ICON_BUTTON_PAD) + 4.0 * 6.0 + 4.0;
 
 /// Whether the full screen button has room beside the rest, keeping clear of
 /// the transport, with `room` points to the right of it.
@@ -1102,9 +1124,46 @@ fn extras(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, transport_
     {
         app.actions.push(Action::ToggleLyricsPanel);
     }
+    // Spicy Lyrics takes the page's place, as its lyrics view does in the
+    // official client.
+    if theme::icon_button(
+        ui,
+        Icon::Sparkles,
+        18.0,
+        if app.spicy_lyrics {
+            palette.accent
+        } else {
+            palette.secondary
+        },
+        palette.text,
+        &gettext(app.locale, "Spicy Lyrics"),
+    )
+    .clicked()
+    {
+        app.actions.push(Action::ToggleSpicyLyrics);
+    }
     // The Listening activity button is the first to go in a narrow window,
-    // so it never crowds the transport.
-    let left = ui.min_rect().left() - ui.spacing().item_spacing.x - (18.0 + theme::ICON_BUTTON_PAD);
+    // so it never crowds the transport. Now playing goes just after it.
+    let mut left =
+        ui.min_rect().left() - ui.spacing().item_spacing.x - (18.0 + theme::ICON_BUTTON_PAD);
+    if left - transport_right >= TRANSPORT_GAP
+        && theme::icon_button(
+            ui,
+            Icon::AudioLines,
+            18.0,
+            if app.show_now_playing_panel {
+                palette.accent
+            } else {
+                palette.secondary
+            },
+            palette.text,
+            &gettext(app.locale, "Now playing"),
+        )
+        .clicked()
+    {
+        app.actions.push(Action::ToggleNowPlayingPanel);
+    }
+    left = ui.min_rect().left() - ui.spacing().item_spacing.x - (18.0 + theme::ICON_BUTTON_PAD);
     if left - transport_right >= TRANSPORT_GAP
         && theme::icon_button(
             ui,

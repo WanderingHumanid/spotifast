@@ -1367,13 +1367,23 @@ pub enum Action {
     ToggleSidebar,
     ToggleQueuePanel,
     ToggleLyricsPanel,
+    /// Show or hide Spicy Lyrics, the animated word-by-word view, in the
+    /// page's place above the player bar.
+    ToggleSpicyLyrics,
     /// Show or hide what friends are listening to, in the right panel.
     ToggleFriendsPanel,
+    /// Show or hide the Now playing column: the song, a live lyric preview and
+    /// the artist around it.
+    ToggleNowPlayingPanel,
     SetLyricsFullscreen(bool),
     LyricsLineShown(Option<usize>),
     FollowLyrics,
     PauseLyricsFollow,
     RetryLyrics,
+    /// Ask for the playing track's lyrics again after a settings change.
+    RefreshLyrics,
+    /// Save the word-level provider's key; an empty string removes it.
+    SaveWordSyncKey(String),
     ToggleDevicesPopup,
     /// Ask GitHub for the latest release and report the result to the user.
     CheckForUpdates,

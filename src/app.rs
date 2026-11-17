@@ -21,7 +21,7 @@ use crate::model::QueueTab;
 use crate::model::*;
 use crate::paths::AppDirs;
 use crate::player::{EngineConfig, LoadSpec, LocalState, Playback, PlayerCommand, RepeatMode};
-use crate::settings::{CachedRootlist, SessionState, Settings, ThemeChoice};
+use crate::settings::{CachedRootlist, LucidBackground, SessionState, Settings, ThemeChoice};
 use crate::single_instance::ControlCommand;
 use crate::theme::{self, Palette};
 use crate::util;
@@ -666,9 +666,27 @@ pub struct App {
     uploaded_covers: std::collections::HashMap<String, crate::playlist_cover::PendingCover>,
     pub show_queue_panel: bool,
     pub show_lyrics_panel: bool,
+    /// Spicy Lyrics sits in the right column beside the page, and takes the
+    /// whole window only when its full screen button is used.
+    pub spicy_lyrics: bool,
+    /// The word-level provider's key as typed in Settings. It is written to
+    /// its own private file, never to the settings JSON.
+    pub word_sync_key_input: String,
+    /// Whether the key file exists; `None` until the page first asks.
+    pub word_sync_key_saved: Option<bool>,
     /// Friend activity takes the right panel's place, so at most one of the
     /// Queue, Lyrics and Friend activity is open.
     pub show_friends_panel: bool,
+    /// The Now playing column takes the right panel's place, with a live
+    /// preview of the words and the artist behind the song.
+    pub show_now_playing_panel: bool,
+    /// The track last seen, playing or paused, so only a different song opens
+    /// the Now playing column: resuming the same one must not reopen a panel
+    /// the user closed.
+    now_playing_uri: Option<String>,
+    /// False until the first frame has recorded its track, so a song that is
+    /// already playing at launch does not pop the column open.
+    now_playing_primed: bool,
     /// What friends last played. A refresh keeps the last answer on screen.
     pub friends: Loadable<Vec<crate::session_reads::FriendActivity>>,
     friends_in_flight: bool,
@@ -1398,7 +1416,16 @@ impl App {
             uploaded_covers: Default::default(),
             show_queue_panel: session.queue_open.unwrap_or(false),
             show_lyrics_panel: false,
+            spicy_lyrics: false,
+            word_sync_key_input: String::new(),
+            word_sync_key_saved: None,
             show_friends_panel: false,
+            show_now_playing_panel: false,
+            // The first frame records its song without opening anything, so a
+            // session already playing at launch keeps the columns as the user
+            // left them.
+            now_playing_uri: None,
+            now_playing_primed: false,
             friends: Loadable::NotLoaded,
             friends_in_flight: false,
             friends_fetched_at: None,
@@ -1563,6 +1590,8 @@ impl App {
     /// window is (re)created around this long-lived application state.
     pub fn attach(&mut self, ctx: &egui::Context) {
         theme::install(ctx);
+        #[cfg(feature = "demo")]
+        crate::demo::install_art(ctx);
         ctx.add_bytes_loader(std::sync::Arc::new(self.backend.art().clone()));
         ctx.add_image_loader(std::sync::Arc::new(self.backend.art().scaler()));
         // The covers the last window's egui held are gone with it.
@@ -2653,9 +2682,36 @@ impl App {
         }
     }
 
-    /// The colour to tint the interface with, from the playing art.
+    /// The cover colour that seeds Lucid's whole palette: the page being
+    /// viewed when it has art, else the song that is playing.
+    fn lucid_cover_tint(&self) -> Option<Color32> {
+        if self.settings.theme != ThemeChoice::Lucid
+            || !self.settings.accent_from_art
+            || !self.settings.lucid_cover_tint
+            || self.settings.lucid_background == LucidBackground::Dark
+        {
+            return None;
+        }
+        if let Some(url) = crate::ui::page_art(self, 64)
+            && let Some(color) = self.accents.get(&url)
+        {
+            return Some(*color);
+        }
+        let now = self.now_playing()?;
+        let url = now.art_small.or(now.art_url)?;
+        self.accents.get(&url).copied()
+    }
+
+    /// The colour to tint the interface with, from the playing art. Lucid
+    /// panels can opt out of cover colours while keeping the accent elsewhere.
     pub fn now_playing_tint(&self) -> Option<Color32> {
         if !self.settings.accent_from_art {
+            return None;
+        }
+        if self.settings.theme == ThemeChoice::Lucid
+            && (!self.settings.lucid_cover_tint
+                || self.settings.lucid_background == LucidBackground::Dark)
+        {
             return None;
         }
         let now = self.now_playing()?;
@@ -3505,7 +3561,10 @@ impl App {
                         }
                         if matches!(self.lyrics, Loadable::Loaded(None) | Loadable::Failed(_)) {
                             self.lyrics = Loadable::NotLoaded;
-                            if self.show_lyrics_panel || self.lyrics_fullscreen.is_some() {
+                            if self.show_lyrics_panel
+                                || self.lyrics_fullscreen.is_some()
+                                || self.spicy_lyrics
+                            {
                                 self.request_lyrics();
                             }
                         }
@@ -3857,6 +3916,44 @@ impl App {
             .values()
             .map(TableRowsCache::retained_bytes)
             .sum()
+    }
+
+    /// Spicetify opens its Now playing view when a song starts, and this
+    /// keeps the same promise without stealing a column the user opened:
+    /// queue, lyrics, Spicy Lyrics and friend activity are left alone, and
+    /// full screen lyrics are never covered. Only a different song counts:
+    /// resuming the same track leaves a closed column closed.
+    fn open_now_playing_on_play(&mut self) {
+        // Pick up a play that an action in this frame just made, before the
+        // frame's own refresh would see it.
+        self.refresh_frame_now();
+        let now = self.now_playing();
+        let playing = now.as_ref().is_some_and(|now| now.playing);
+        let uri = now.as_ref().map(|now| now.uri.clone());
+        let started =
+            playing && self.now_playing_primed && uri.as_deref() != self.now_playing_uri.as_deref();
+        self.now_playing_primed = true;
+        if uri.is_some() {
+            self.now_playing_uri = uri;
+        }
+        if !started
+            || self.lyrics_fullscreen.is_some()
+            || self.settings.winamp_window
+            || !self.is_connected()
+        {
+            return;
+        }
+        if self.show_now_playing_panel
+            || self.show_queue_panel
+            || self.show_lyrics_panel
+            || self.show_friends_panel
+            || self.spicy_lyrics
+        {
+            return;
+        }
+        self.show_now_playing_panel = true;
+        self.request_lyrics();
+        self.ensure_now_playing_artist();
     }
 
     fn handle_local(&mut self, state: LocalState) {
@@ -4367,11 +4464,16 @@ impl App {
         {
             self.refresh_queue(true);
         }
-        if self.show_lyrics_panel || self.lyrics_fullscreen.is_some() {
+        if self.show_lyrics_panel
+            || self.lyrics_fullscreen.is_some()
+            || self.spicy_lyrics
+            || self.show_now_playing_panel
+        {
             // Fullscreen shows lyrics without the panel flag when the
             // queue column is open; a track change must refresh them.
             self.request_lyrics();
         }
+        self.ensure_now_playing_artist();
     }
 
     /// Asks what friends last played, unless an answer is on the way. The
@@ -4472,6 +4574,7 @@ impl App {
                 duration_ms: now.duration_ms,
             },
             local_file,
+            word_sync: self.settings.word_sync == crate::settings::WordSyncChoice::SpicyLyrics,
         })));
     }
 
@@ -4641,7 +4744,10 @@ impl App {
                 self.refresh_devices();
             }
             let playlist_open = self.settings.winamp_window && self.settings.playlist_open;
-            if (self.show_queue_panel || matches!(self.page(), Page::Queue) || playlist_open)
+            if (self.show_queue_panel
+                || self.show_now_playing_panel
+                || matches!(self.page(), Page::Queue)
+                || playlist_open)
                 && !self.queue.is_loading()
                 && self
                     .queue_fetched_at
@@ -5571,10 +5677,17 @@ impl App {
                 egui::ThemePreference::Light
             };
         }
+        // Lucid's clean background is dark whatever the desktop is doing.
+        if self.settings.theme == ThemeChoice::Lucid
+            && self.settings.lucid_background == LucidBackground::Dark
+        {
+            return egui::ThemePreference::Dark;
+        }
         match self.settings.theme {
             ThemeChoice::Dark => egui::ThemePreference::Dark,
             ThemeChoice::Light => egui::ThemePreference::Light,
-            ThemeChoice::System => egui::ThemePreference::System,
+            // Lucid has a palette for either appearance.
+            ThemeChoice::Lucid | ThemeChoice::System => egui::ThemePreference::System,
         }
     }
 
@@ -5597,18 +5710,33 @@ impl App {
             }
         }
         let dark = ctx.theme() == egui::Theme::Dark;
-        let palette = self.custom_palette(dark).unwrap_or_else(|| {
-            if dark {
+        let base = self.custom_palette(dark).unwrap_or_else(|| {
+            // Lucid's own seed ladder is green-cast near-black or paper; the
+            // app's plain Light and Dark are only the fallback for other
+            // themes and for Lucid while no cover colour has arrived.
+            if self.settings.theme == ThemeChoice::Lucid {
+                crate::theme::lucid::palette(dark)
+            } else if dark {
                 Palette::dark()
             } else {
                 Palette::light()
             }
         });
+        // Lucid takes the page or playing cover's hue into every surface it
+        // derives, so the search bar, the columns and both bars follow the
+        // cover instead of keeping the theme's green seed.
+        let palette = match self.lucid_cover_tint() {
+            Some(tint) => crate::theme::lucid::palette_from_tint(dark, tint),
+            None => base,
+        };
         if self.applied_dark != Some(dark) || self.palette != palette {
             // The first colours need no reveal, and the mini player's window
             // is drawn by its skin.
+            // A cover arriving changes only the palette's tint, so it must
+            // not fade the whole interface as a theme switch does.
             if self.reveal_theme_changes
                 && !self.motion.reduced()
+                && self.applied_dark != Some(dark)
                 && self.applied_dark.is_some()
                 && !self.settings.winamp_window
             {
@@ -5620,9 +5748,14 @@ impl App {
             self.palette = palette;
             theme::apply(ctx, &self.palette);
             crate::motion::apply(ctx, self.motion.reduced());
+            // Cover accents are softened for the current appearance, so only a
+            // change of appearance invalidates them. A theme change within the
+            // same appearance keeps them, and Lucid's glass keeps its colour.
+            if self.applied_dark.is_some_and(|was| was != dark) {
+                self.accents.clear();
+                self.accent_pending.clear();
+            }
             self.applied_dark = Some(dark);
-            self.accents.clear();
-            self.accent_pending.clear();
         }
     }
 
@@ -6530,6 +6663,44 @@ impl App {
             id: id.to_owned(),
             generation,
         });
+    }
+
+    /// Loads the artist and the small artist page used by the Now playing
+    /// column. The artist page owns this cache, so opening that page later is
+    /// instant and there is only one copy of the data.
+    fn ensure_now_playing_artist(&mut self) {
+        if !self.show_now_playing_panel || !self.is_connected() || !self.network_reachable {
+            return;
+        }
+        let Some(id) = self
+            .now_playing()
+            .and_then(|now| now.artists.iter().find_map(|artist| artist.id.clone()))
+        else {
+            return;
+        };
+        let (artist, related, top) = {
+            let page = self.artist_pages.entry(id.clone()).or_default();
+            let artist = matches!(page.artist, Loadable::NotLoaded);
+            let related = matches!(page.related, Loadable::NotLoaded);
+            let top = matches!(page.top_tracks, Loadable::NotLoaded);
+            if artist {
+                page.artist = Loadable::Loading;
+            }
+            if related {
+                page.related = Loadable::Loading;
+            }
+            (artist, related, top)
+        };
+        if artist {
+            self.backend.api(ApiRequest::Artist { id: id.clone() });
+        }
+        if related {
+            self.backend
+                .api(ApiRequest::RelatedArtists { id: id.clone() });
+        }
+        if top {
+            self.request_artist_top_tracks(&id);
+        }
     }
 
     fn load_artist_albums(&mut self, id: &str, filter: DiscographyFilter) {
@@ -13415,6 +13586,7 @@ impl App {
             Action::SignOut => {
                 self.backend.send(Command::SignOut);
                 self.show_friends_panel = false;
+                self.show_now_playing_panel = false;
                 self.history = vec![Page::Home];
                 self.history_index = 0;
             }
@@ -13427,6 +13599,8 @@ impl App {
                 if self.show_queue_panel {
                     self.show_lyrics_panel = false;
                     self.show_friends_panel = false;
+                    self.spicy_lyrics = false;
+                    self.show_now_playing_panel = false;
                     self.refresh_queue(true);
                 }
             }
@@ -13436,7 +13610,22 @@ impl App {
                 if self.show_lyrics_panel {
                     self.show_queue_panel = false;
                     self.show_friends_panel = false;
+                    self.spicy_lyrics = false;
+                    self.show_now_playing_panel = false;
                     self.lyrics_following = true;
+                    self.request_lyrics();
+                }
+            }
+            Action::ToggleSpicyLyrics => {
+                self.leave_lyrics_fullscreen(ctx);
+                self.spicy_lyrics = !self.spicy_lyrics;
+                if self.spicy_lyrics {
+                    self.show_queue_panel = false;
+                    self.show_lyrics_panel = false;
+                    self.show_friends_panel = false;
+                    self.show_now_playing_panel = false;
+                    self.lyrics_following = true;
+                    self.lyrics_line_shown = None;
                     self.request_lyrics();
                 }
             }
@@ -13445,7 +13634,20 @@ impl App {
                 if self.show_friends_panel {
                     self.show_queue_panel = false;
                     self.show_lyrics_panel = false;
+                    self.spicy_lyrics = false;
+                    self.show_now_playing_panel = false;
                     self.refresh_friends();
+                }
+            }
+            Action::ToggleNowPlayingPanel => {
+                self.show_now_playing_panel = !self.show_now_playing_panel;
+                if self.show_now_playing_panel {
+                    self.show_queue_panel = false;
+                    self.show_lyrics_panel = false;
+                    self.show_friends_panel = false;
+                    self.spicy_lyrics = false;
+                    self.request_lyrics();
+                    self.ensure_now_playing_artist();
                 }
             }
             Action::SetLyricsFullscreen(fullscreen) => {
@@ -13470,10 +13672,15 @@ impl App {
                     // The queue flag is preserved: an open side panel becomes
                     // the fullscreen queue column instead of vanishing. The
                     // lyrics panel yields, so normal mode never shows both.
-                    if !self.show_queue_panel {
+                    // Spicy Lyrics already owns the right column, so its
+                    // full screen view does not also open the stock panel.
+                    if self.spicy_lyrics {
+                        self.show_lyrics_panel = false;
+                    } else if !self.show_queue_panel {
                         self.show_lyrics_panel = true;
                     }
                     self.show_friends_panel = false;
+                    self.show_now_playing_panel = false;
                     self.lyrics_following = true;
                     self.lyrics_line_shown = None;
                     self.request_lyrics();
@@ -13485,7 +13692,7 @@ impl App {
             Action::LyricsLineShown(line) => {
                 // Escape or navigation may already have left the view earlier
                 // in this frame. The returning panel still needs to reposition.
-                if self.lyrics_fullscreen.is_some() {
+                if self.lyrics_fullscreen.is_some() || self.spicy_lyrics {
                     self.lyrics_line_shown = Some(line);
                 }
             }
@@ -13497,6 +13704,25 @@ impl App {
             Action::RetryLyrics => {
                 self.lyrics_retries = 0;
                 self.request_lyrics();
+            }
+            Action::RefreshLyrics => {
+                self.lyrics_uri = None;
+                self.lyrics_retries = 0;
+                self.lyrics_retry_at = None;
+                self.lyrics = Loadable::NotLoaded;
+                self.request_lyrics();
+            }
+            Action::SaveWordSyncKey(key) => {
+                let key = key.trim().to_string();
+                let path = crate::word_sync::key_path(&self.dirs);
+                self.files.write(
+                    &path,
+                    key.as_bytes().to_vec(),
+                    fastframe_file::Access::Private,
+                );
+                self.word_sync_key_saved = Some(!key.is_empty());
+                self.word_sync_key_input.clear();
+                self.actions.push(Action::RefreshLyrics);
             }
             Action::ToggleDevicesPopup => {
                 self.show_devices = !self.show_devices;
@@ -13605,7 +13831,19 @@ impl App {
                 self.mark_settings_dirty();
             }
             Action::SetTheme(choice) => {
+                let was_lucid = self.settings.theme == ThemeChoice::Lucid;
                 self.settings.theme = choice;
+                // Lucid opens with its cover rail; leaving it restores the
+                // ordinary library width if the rail was not widened by hand.
+                if choice == ThemeChoice::Lucid && !was_lucid && self.settings.sidebar_width > 160.0
+                {
+                    self.settings.sidebar_width = 104.0;
+                } else if choice != ThemeChoice::Lucid
+                    && was_lucid
+                    && self.settings.sidebar_width <= 160.0
+                {
+                    self.settings.sidebar_width = 250.0;
+                }
                 self.settings.custom_theme = None;
                 self.settings.custom_theme_cache = None;
                 self.mark_settings_dirty();
@@ -14887,6 +15125,7 @@ impl App {
             crate::ui::show(self, ui);
         }
         self.apply_actions(ctx);
+        self.open_now_playing_on_play();
         let autoscroll = self.autoscroll.finish(
             ctx,
             crate::autoscroll::enabled(self.settings.middle_click_autoscroll),
@@ -16175,10 +16414,12 @@ mod tests {
                     .map(|i| crate::lyrics::Line {
                         at_ms: Some(i * 5000),
                         text: format!("Autoscroll lyric line {i}"),
+                        ..crate::lyrics::Line::default()
                     })
                     .collect(),
                 synced: true,
                 instrumental: false,
+                attribution: None,
             }));
             if let Some(remote) = &mut app.remote {
                 remote.state.is_playing = false;
@@ -17091,6 +17332,34 @@ mod tests {
             app.show_queue_panel,
             "entering fullscreen keeps the open queue as its column"
         );
+    }
+
+    /// Spicy Lyrics opens a right column first; only its expand action goes
+    /// full screen, and leaving full screen returns to the column.
+    #[test]
+    fn spicy_lyrics_opens_a_column_before_it_goes_fullscreen() {
+        let mut app = headless_app();
+        let ctx = egui::Context::default();
+        app.show_lyrics_panel = true;
+        app.apply(Action::ToggleSpicyLyrics, &ctx);
+        assert!(app.spicy_lyrics);
+        assert!(!app.show_lyrics_panel, "the stock panel yields the column");
+        assert!(
+            app.lyrics_fullscreen.is_none(),
+            "opening the column is not full screen"
+        );
+        app.apply(Action::SetLyricsFullscreen(true), &ctx);
+        assert!(app.lyrics_fullscreen.is_some());
+        assert!(app.spicy_lyrics, "the same view takes the whole window");
+        app.apply(Action::SetLyricsFullscreen(false), &ctx);
+        assert!(app.lyrics_fullscreen.is_none());
+        assert!(
+            app.spicy_lyrics,
+            "closing full screen returns to the column"
+        );
+        app.apply(Action::ToggleQueuePanel, &ctx);
+        assert!(app.show_queue_panel);
+        assert!(!app.spicy_lyrics, "the queue takes the right column");
     }
 
     /// Entering fullscreen never leaves both side panels open: the
@@ -24057,6 +24326,22 @@ mod tests {
         app.backend.shutdown();
     }
 
+    #[test]
+    fn now_playing_panel_swaps_places_with_the_queue_and_lyrics() {
+        let ctx = egui::Context::default();
+        let mut app = test_app("now-playing-panel-swap");
+        app.show_queue_panel = true;
+        app.apply(Action::ToggleNowPlayingPanel, &ctx);
+        assert!(app.show_now_playing_panel && !app.show_queue_panel);
+        app.apply(Action::ToggleLyricsPanel, &ctx);
+        assert!(app.show_lyrics_panel && !app.show_now_playing_panel);
+        app.apply(Action::ToggleNowPlayingPanel, &ctx);
+        assert!(!app.show_lyrics_panel && app.show_now_playing_panel);
+        app.apply(Action::ToggleNowPlayingPanel, &ctx);
+        assert!(!app.show_now_playing_panel);
+        app.backend.shutdown();
+    }
+
     /// The Listening activity button sits in the player bar beside Lyrics,
     /// and gives way in a narrow window before it crowds Repeat.
     #[cfg(feature = "demo")]
@@ -24115,8 +24400,10 @@ mod tests {
                 assert!(shown_at.is_none(), "it stays once shown, gone at {width}");
             }
         }
-        assert!(button_at.is_some_and(|width| width > 760.0 && width <= 840.0));
-        assert!(shown_at.is_some_and(|width| Some(width) > button_at && width <= 920.0));
+        // The Now Playing control joins the right side before these, so the
+        // full screen button appears a step later than it did without it.
+        assert!(button_at.is_some_and(|width| width > 840.0 && width <= 880.0));
+        assert!(shown_at.is_some_and(|width| Some(width) > button_at && width <= 1040.0));
         app.backend.shutdown();
     }
 
@@ -25150,7 +25437,14 @@ mod tests {
             assert_eq!(app.settings.theme, choice);
             assert!(app.settings.custom_theme.is_none());
             assert!(app.settings.custom_theme_cache.is_none());
-            if choice != ThemeChoice::System {
+            if choice == ThemeChoice::Lucid {
+                // Lucid has a palette for either appearance and follows the
+                // desktop, so its colours match whichever one is showing.
+                assert_eq!(
+                    app.palette,
+                    theme::lucid::palette(ctx.theme() == egui::Theme::Dark)
+                );
+            } else if choice != ThemeChoice::System {
                 assert_eq!(app.palette.dark, choice == ThemeChoice::Dark);
             }
         }
