@@ -1950,6 +1950,8 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
             // opens the full screen view in the demo window.
             "spicy-lyrics"
             | "spicy-lyrics-timed"
+            | "spicy-lyrics-interlude"
+            | "spicy-lyrics-fullscreen-interlude"
             | "spicy-lyrics-unsynced"
             | "spicy-lyrics-empty"
             | "spicy-lyrics-fullscreen"
@@ -1963,13 +1965,30 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
                 app.lyrics_following = true;
                 let timed =
                     surface == "spicy-lyrics-timed" || surface == "spicy-lyrics-fullscreen-timed";
+                // `-interlude` parks the view inside a long instrumental after
+                // the word-timed line, where Spicy draws its three dots.
+                let interlude = surface.contains("interlude");
                 let unsynced = surface == "spicy-lyrics-unsynced";
                 let empty = surface.ends_with("-empty");
-                let mut lyrics = if timed {
+                let mut lyrics = if timed || interlude {
                     sample_lyrics_with_words()
                 } else {
                     sample_lyrics()
                 };
+                if interlude {
+                    // Leave a nine second pause after the word-timed line.
+                    for line in lyrics.lines.iter_mut().skip(8) {
+                        if let Some(at_ms) = line.at_ms.as_mut() {
+                            *at_ms += 9_000;
+                        }
+                        for syllable in line.syllables.iter_mut() {
+                            syllable.at_ms += 9_000;
+                            if let Some(end_ms) = syllable.end_ms.as_mut() {
+                                *end_ms += 9_000;
+                            }
+                        }
+                    }
+                }
                 lyrics.synced = !unsynced;
                 // The provider credit Spicy's API requires, shown in the
                 // masthead and at the end of the words.
@@ -1987,12 +2006,21 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
                 if surface.contains("fullscreen") {
                     app.lyrics_fullscreen = Some(false);
                 }
-                if timed {
+                let position = if interlude {
+                    // Early in the third dot's turn: the shot's own delay
+                    // leaves all three dots lit whenever it fires.
+                    95_800
+                } else if timed {
                     // Inside the timed line's held word, so a shot lands
                     // between its letters instead of after them.
-                    app.local.position_ms = 87_000;
+                    87_000
+                } else {
+                    0
+                };
+                if position > 0 {
+                    app.local.position_ms = position;
                     if let Some(remote) = app.remote.as_mut() {
-                        remote.state.progress_ms = Some(87_000);
+                        remote.state.progress_ms = Some(position);
                         remote.received_at = std::time::Instant::now();
                     }
                 }
@@ -2803,6 +2831,42 @@ mod tests {
             app.palette.panel.b() > app.palette.panel.g(),
             "the playlist's purple cover reaches the panel: {:?}",
             app.palette.panel
+        );
+    }
+
+    /// Lucid's clean background leaves the seed's green out of its surfaces:
+    /// the cards are neutral near-blacks, and the border that separates them
+    /// is drawn more firmly than over the cover.
+    #[cfg(feature = "demo")]
+    #[test]
+    fn lucid_clean_background_drops_the_green_cast() {
+        let (ctx, mut app) = accessible_app("lucid-clean-background");
+        apply_flags(&mut app, None, Some("lucid-dark"));
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 900.0),
+                )),
+                ..Default::default()
+            },
+            |ui| app.frame_ui(ui),
+        );
+        output.textures_delta.clear();
+        assert_eq!(app.palette, crate::theme::lucid::clean_palette());
+        for (name, colour) in [
+            ("window", app.palette.window),
+            ("panel", app.palette.panel),
+            ("surface", app.palette.surface),
+            ("outline", app.palette.outline),
+        ] {
+            let [r, g, b, _] = colour.to_srgba_unmultiplied();
+            assert!(r == g && g == b, "{name} keeps no cast: {colour:?}");
+        }
+        assert!(
+            app.palette.window.r() < 4,
+            "the clean background is black: {:?}",
+            app.palette.window
         );
     }
 

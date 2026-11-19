@@ -849,6 +849,12 @@ from top to bottom and carries a line-wide glow at its own pace, without
 invented word or letter times. A click on a line jumps there, and scrolling by
 hand pauses following. The view asks for frames only while the song plays.
 
+When the words stop for three seconds or more and only the music plays, the
+column draws Spicy Lyrics' interlude: three dots that swell, lift and glow in
+turn, then fade out before the next word arrives. Lines fade between their
+states instead of switching, so passing from one line to the next reads as a
+breath.
+
 For character-synced words on songs that ordinary lyrics time only by line,
 turn on **Settings > Lyrics > Word-level timings** and paste a free secret key
 from [developers.spicylyrics.org](https://developers.spicylyrics.org/).

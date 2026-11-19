@@ -708,9 +708,15 @@ impl Settings {
 
     /// The palette to show while the system is `dark` or light: the fixed
     /// one, else Follow system's choice for that appearance. `None` leaves
-    /// Spotifast's own Light or Dark.
+    /// Spotifast's own Light or Dark. Lucid's clean background is always the
+    /// one dark palette, whatever appearance the desktop reports.
     pub(crate) fn cached_palette(&self, dark: bool) -> Option<crate::theme::Palette> {
         if self.theme == ThemeChoice::Lucid {
+            // The clean background has no artwork and no cover colour, and its
+            // near-black surfaces carry no trace of the seed.
+            if self.lucid_background == LucidBackground::Dark {
+                return Some(crate::theme::lucid::clean_palette());
+            }
             return Some(crate::theme::lucid::palette(dark));
         }
         if let Some(palette) = self.fixed_palette() {
@@ -1173,7 +1179,7 @@ mod tests {
     /// appearance, with a palette for each.
     #[test]
     fn lucid_is_offered_and_follows_the_desktop() {
-        use super::ThemeChoice;
+        use super::{LucidBackground, ThemeChoice};
         assert!(ThemeChoice::ALL.contains(&ThemeChoice::Lucid));
         let settings: Settings =
             serde_json::from_value(serde_json::json!({"theme": "lucid"})).unwrap();
@@ -1187,6 +1193,20 @@ mod tests {
         assert!(dark.dark && !light.dark);
         assert_eq!(dark, crate::theme::lucid::palette(true));
         assert_eq!(light, crate::theme::lucid::palette(false));
+
+        // The clean background is dark whatever the desktop is doing, and it
+        // leaves the seed's green out of its surfaces.
+        let mut clean = settings.clone();
+        clean.lucid_background = LucidBackground::Dark;
+        assert_eq!(
+            clean.cached_palette(true),
+            Some(crate::theme::lucid::clean_palette())
+        );
+        assert_eq!(
+            clean.cached_palette(false),
+            Some(crate::theme::lucid::clean_palette()),
+            "the clean background never turns light"
+        );
     }
 
     /// Files from before fastframe-audio was the only output name a

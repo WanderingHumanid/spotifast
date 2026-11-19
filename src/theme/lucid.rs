@@ -5,7 +5,9 @@
 //! and text colour comes from that ladder. This module builds the same ladder
 //! in OKLCH, once per palette, so the theme has Lucid's green-cast near-black
 //! surfaces in dark mode, its paper-toned light surfaces, and the green
-//! accent both use.
+//! accent both use. Its clean background, which shows no artwork at all, uses
+//! the same ladder without the seed's chroma: at those near-black tones even
+//! a trace of it reads as a green cast.
 //!
 //! Everything here runs when a palette is chosen, never per frame: the
 //! derived colours are plain [`Color32`] values afterwards.
@@ -25,6 +27,41 @@ const ERROR_HUE: f32 = 0.47;
 /// Lucid's palette for the desktop's dark or light appearance.
 pub fn palette(dark: bool) -> Palette {
     palette_from_tint(dark, SEED)
+}
+
+/// Lucid's clean background, `Background: Dark`: the same floating cards and
+/// green accent over a neutral ladder. Lucid's own near-blacks keep a trace
+/// of its seed, and at that darkness the trace is what makes the interface
+/// look green rather than black, so this ladder has no chroma at all: the
+/// cards are greys, and the window behind them is black.
+pub fn clean_palette() -> Palette {
+    let seed = Tonal::from_seed(SEED);
+    let n = |tone: f32| seed.tone_at(seed.hue, 0.0, tone);
+    Palette {
+        dark: true,
+        // The window is black, and the cards step up from it just enough to
+        // read as surfaces of their own; the outline is the hairline that
+        // separates them.
+        window: n(6.0),
+        panel: n(17.0),
+        surface: n(21.0),
+        surface_hover: n(24.0),
+        surface_active: n(27.0),
+        // A hairline that stays visible on the cards without becoming a rule
+        // of its own.
+        outline: n(42.0),
+        text: n(97.0),
+        secondary: n(75.0),
+        dim: n(54.0),
+        accent: seed.primary(80.0),
+        accent_hover: seed.primary(88.0),
+        on_accent: seed.primary(16.0),
+        danger: seed.tone_at(ERROR_HUE, 0.15, 80.0),
+        warning: seed.tone_at(WARNING_HUE, 0.14, 82.0),
+        overlay: n(22.0),
+        shadow: Color32::from_black_alpha(200),
+        tint: with_alpha(seed.primary(70.0), 30),
+    }
 }
 
 /// Lucid's palette seeded from a cover's colour. Lucid derives every surface
@@ -275,6 +312,72 @@ mod tests {
             assert_ne!(palette.tint.a(), 0, "the header bloom is visible");
             assert!(palette.tint.a() < 64, "a quiet bloom");
         }
+    }
+
+    /// The clean background carries no hue at all: every grey stays neutral,
+    /// the ladder still climbs, the window is black, and Lucid's green accent
+    /// is the one colour left.
+    #[test]
+    fn the_clean_background_is_neutral() {
+        let palette = clean_palette();
+        assert!(palette.dark);
+        for (name, color) in [
+            ("window", palette.window),
+            ("panel", palette.panel),
+            ("surface", palette.surface),
+            ("surface_hover", palette.surface_hover),
+            ("surface_active", palette.surface_active),
+            ("outline", palette.outline),
+            ("overlay", palette.overlay),
+            ("text", palette.text),
+            ("secondary", palette.secondary),
+            ("dim", palette.dim),
+        ] {
+            let [r, g, b, _] = color.to_srgba_unmultiplied();
+            assert!(
+                r == g && g == b,
+                "{name} keeps a cast from the seed: {color:?}"
+            );
+        }
+        let ladder = [
+            palette.window,
+            palette.panel,
+            palette.surface,
+            palette.surface_hover,
+            palette.surface_active,
+        ];
+        for pair in ladder.windows(2) {
+            assert!(
+                luminance(pair[1]) > luminance(pair[0]),
+                "{:?} is not above {:?}",
+                pair[1],
+                pair[0]
+            );
+        }
+        assert!(
+            luminance(palette.window) < 0.001,
+            "the window is black: {:?}",
+            palette.window
+        );
+        assert!(
+            palette.accent.g() > palette.accent.r() && palette.accent.g() > palette.accent.b(),
+            "the accent stays Lucid's green: {:?}",
+            palette.accent
+        );
+        let contrast = |a: Color32, b: Color32| {
+            let (a, b) = (luminance(a) + 0.05, luminance(b) + 0.05);
+            if a > b { a / b } else { b / a }
+        };
+        assert!(
+            contrast(palette.text, palette.surface) >= 7.0,
+            "text on a card: {}",
+            contrast(palette.text, palette.surface)
+        );
+        assert!(
+            contrast(palette.outline, palette.surface) >= 2.0,
+            "the hairline is visible on a card: {}",
+            contrast(palette.outline, palette.surface)
+        );
     }
 
     /// Choosing Lucid twice gives the same colours, so a palette comparison

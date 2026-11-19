@@ -78,13 +78,42 @@ const LETTER_LIFT: &[(f32, f32)] = &[(0.0, 0.01), (0.9, -1.0 / 56.0), (1.0, 0.0)
 const WORD_LIFT: &[(f32, f32)] = &[(0.0, 0.01), (0.9, -1.0 / 60.0), (1.0, 0.0)];
 const GLOW: &[(f32, f32)] = &[(0.0, 0.0), (0.15, 1.0), (0.6, 1.0), (1.0, 0.0)];
 /// Spicy Lyrics chases those curves with damped springs rather than reading
-/// them directly. These are its scale, Y offset and glow spring settings.
-const SCALE_HZ: f32 = 0.88;
-const SCALE_DAMPING: f32 = 0.64;
-const LIFT_HZ: f32 = 1.45;
-const LIFT_DAMPING: f32 = 0.40;
-const GLOW_HZ: f32 = 1.18;
-const GLOW_DAMPING: f32 = 0.56;
+/// them directly. These are its scale, Y offset and glow spring settings,
+/// slowed a touch so a word that passes quickly still lands with weight
+/// instead of flicking past.
+const SCALE_HZ: f32 = 0.82;
+const SCALE_DAMPING: f32 = 0.66;
+const LIFT_HZ: f32 = 1.35;
+const LIFT_DAMPING: f32 = 0.42;
+const GLOW_HZ: f32 = 1.10;
+const GLOW_DAMPING: f32 = 0.58;
+/// A pause in the vocals at least this long becomes Spicy's interlude: three
+/// dots that swell and lift in turn while only the music plays.
+const INTERLUDE_GAP_MS: u32 = 3_000;
+/// The dot line fades out this long before the next vocal, so the words never
+/// arrive on top of it. Spicy's `preHiddenDotLineMs` plus its own padding.
+const DOT_PRE_HIDDEN_MS: u32 = 500;
+/// The dots' own curves and springs, from Spicy's dot renderer. Each dot takes
+/// its turn across a third of the interlude.
+const DOT_SCALE: &[(f32, f32)] = &[(0.0, 0.75), (0.7, 1.05), (1.0, 1.0)];
+const DOT_LIFT: &[(f32, f32)] = &[(0.0, 0.0), (0.9, -0.12), (1.0, 0.0)];
+const DOT_GLOW: &[(f32, f32)] = &[(0.0, 0.0), (0.6, 1.0), (1.0, 1.0)];
+const DOT_OPACITY: &[(f32, f32)] = &[(0.0, 0.35), (0.6, 1.0), (1.0, 1.0)];
+const DOT_SCALE_HZ: f32 = 0.70;
+const DOT_SCALE_DAMPING: f32 = 0.60;
+const DOT_LIFT_HZ: f32 = 1.25;
+const DOT_LIFT_DAMPING: f32 = 0.40;
+const DOT_GLOW_HZ: f32 = 1.00;
+const DOT_GLOW_DAMPING: f32 = 0.50;
+const DOT_OPACITY_HZ: f32 = 1.00;
+const DOT_OPACITY_DAMPING: f32 = 0.50;
+/// A line's own fade in and out, and the 1.05 swell a line-synced line wears
+/// while it is sung. Spicy transitions those with CSS; springs keep them off
+/// the frame grid, so a line arrives and leaves instead of switching.
+const LINE_ALPHA_HZ: f32 = 1.80;
+const LINE_ALPHA_DAMPING: f32 = 0.86;
+const LINE_SCALE_HZ: f32 = 2.00;
+const LINE_SCALE_DAMPING: f32 = 0.85;
 
 const PANEL_ID: &str = "spicy-lyrics-panel";
 
@@ -567,6 +596,199 @@ fn line_depth(index: usize, active: Option<usize>, fullscreen: bool) -> f32 {
     1.0 - (1.0 - floor) * ramp
 }
 
+/// A stretch of music with no words: Spicy draws three dots through it, each
+/// swelling in its turn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Interlude {
+    /// The line it follows; `None` for the intro before the first line.
+    after: Option<usize>,
+    start_ms: u32,
+    end_ms: u32,
+}
+
+/// When the line at `index` stops being sung. A source with syllable end
+/// times says so itself. A line-synced source runs to the next line, so it has
+/// no gap to find and no interlude: there is nothing to tell a breath from a
+/// long instrumental.
+fn vocal_end(lyrics: &Lyrics, index: usize) -> Option<u32> {
+    let line = lyrics.lines.get(index)?;
+    let start = line.at_ms?;
+    let end = line
+        .syllables
+        .iter()
+        .filter_map(|syllable| syllable.end_ms)
+        .max()?;
+    (end > start).then_some(end)
+}
+
+/// The interludes of a lyric sheet, in order: the intro before the first line
+/// and every pause between a line's last syllable and the next line's start
+/// that lasts at least [`INTERLUDE_GAP_MS`].
+fn interludes(lyrics: &Lyrics) -> Vec<Interlude> {
+    let mut found = Vec::new();
+    if !lyrics.synced {
+        return found;
+    }
+    if let Some(first) = lyrics
+        .lines
+        .iter()
+        .find_map(|line| line.at_ms)
+        .filter(|start| *start >= INTERLUDE_GAP_MS)
+    {
+        found.push(Interlude {
+            after: None,
+            start_ms: 0,
+            end_ms: first,
+        });
+    }
+    for index in 0..lyrics.lines.len() {
+        let Some(start_ms) = vocal_end(lyrics, index) else {
+            continue;
+        };
+        let Some(end_ms) = lyrics
+            .lines
+            .iter()
+            .skip(index + 1)
+            .find_map(|line| line.at_ms)
+        else {
+            continue;
+        };
+        if end_ms.saturating_sub(start_ms) >= INTERLUDE_GAP_MS {
+            found.push(Interlude {
+                after: Some(index),
+                start_ms,
+                end_ms,
+            });
+        }
+    }
+    found
+}
+
+/// The three dots in turn across an interlude, as Spicy times them: an even
+/// third each, with the group finishing [`DOT_PRE_HIDDEN_MS`] plus a little
+/// before the next vocal so it can fade out first.
+fn dot_spans(interlude: &Interlude) -> [(u32, u32); 3] {
+    let start = f64::from(interlude.start_ms);
+    let total = f64::from(interlude.end_ms.saturating_sub(interlude.start_ms));
+    let base = total / 3.0;
+    let padding = -f64::from(DOT_PRE_HIDDEN_MS) - 50.0;
+    let first = (start + base + padding / 3.0).max(start) as u32;
+    let second = (start + base * 2.0 + padding * 2.0 / 3.0).max(f64::from(first)) as u32;
+    let third = (start + total + padding).max(f64::from(second)) as u32;
+    [
+        (interlude.start_ms, first),
+        (first, second),
+        (second, third),
+    ]
+}
+
+fn smoothstep(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// The dot line starts at the words' left edge rather than straddling the
+/// middle of the row, so it reads as the next line's opening pause.
+fn dot_centres(rect: Rect, radius: f32, spacing: f32) -> [egui::Pos2; 3] {
+    let y = rect.center().y;
+    std::array::from_fn(|dot| pos2(rect.left() + radius + dot as f32 * spacing, y))
+}
+
+/// One interlude row: three dots that swell, lift and glow in turn. The row
+/// keeps its height whether or not it is showing, so the sheet never jumps
+/// when the dots arrive.
+#[allow(clippy::too_many_arguments)]
+fn draw_interlude(
+    ui: &mut egui::Ui,
+    text_color: Color32,
+    left: f32,
+    width: f32,
+    size: f32,
+    position: u32,
+    ordinal: usize,
+    interlude: &Interlude,
+    motion: &mut Motion,
+    spring_dt: f32,
+) -> Rect {
+    let (slot, _) = ui.allocate_exact_size(vec2(width, size * LINE_LEADING), Sense::hover());
+    let rect = Rect::from_min_size(pos2(left, slot.top()), slot.size());
+    if position < interlude.start_ms || position >= interlude.end_ms {
+        // Idle dots begin their next interlude from Spicy's resting pose, and
+        // settled springs let the view stop repainting.
+        for dot in 0..3 {
+            let springs = motion.dots.entry((ordinal as u32, dot as u32)).or_default();
+            if springs.moving() {
+                *springs = DotSprings::idle();
+            }
+        }
+        return rect;
+    }
+    // The group fades in as the dots start and out over their last half
+    // second, which is the fade Spicy gives its dot line.
+    let arriving = (position.saturating_sub(interlude.start_ms) as f32 / 160.0).min(1.0);
+    let leaving =
+        (interlude.end_ms.saturating_sub(position) as f32 / DOT_PRE_HIDDEN_MS as f32).min(1.0);
+    let group = smoothstep(arriving) * smoothstep(leaving);
+    let spans = dot_spans(interlude);
+    // Spicy's dots are bullets in a 1.3em line: their centres sit about half
+    // the lyric size apart, with a little air around each.
+    let spacing = size * 0.52;
+    let radius = size * 0.16;
+    let centres = dot_centres(rect, radius, spacing);
+    let painter = ui.painter().with_clip_rect(ui.clip_rect());
+    for (dot, (at, end)) in spans.iter().enumerate() {
+        let fraction = if position >= *end {
+            1.0
+        } else if position < *at {
+            0.0
+        } else {
+            progress(position, *at, *end)
+        };
+        let springs = motion.dots.entry((ordinal as u32, dot as u32)).or_default();
+        springs.scale.goal = spline(DOT_SCALE, fraction);
+        springs.lift.goal = spline(DOT_LIFT, fraction) * size;
+        springs.glow.goal = spline(DOT_GLOW, fraction);
+        springs.opacity.goal = spline(DOT_OPACITY, fraction);
+        if spring_dt <= 0.0 {
+            springs.scale.settle();
+            springs.lift.settle();
+            springs.glow.settle();
+            springs.opacity.settle();
+        }
+        let scale = springs
+            .scale
+            .step(spring_dt, DOT_SCALE_HZ, DOT_SCALE_DAMPING);
+        let lift = springs.lift.step(spring_dt, DOT_LIFT_HZ, DOT_LIFT_DAMPING);
+        let glow = springs.glow.step(spring_dt, DOT_GLOW_HZ, DOT_GLOW_DAMPING);
+        let opacity = springs
+            .opacity
+            .step(spring_dt, DOT_OPACITY_HZ, DOT_OPACITY_DAMPING);
+        let x = centres[dot].x;
+        let y = centres[dot].y + lift;
+        let alpha = (opacity.clamp(0.0, 1.0) * group * 255.0).round() as u8;
+        if alpha == 0 {
+            continue;
+        }
+        // The same soft halo the words get: wide, faint discs behind the dot.
+        if glow > 0.02 {
+            let halo = (glow.clamp(0.0, 1.0) * 55.0 * group) as u16;
+            for (spread, share) in [(1.9, 2u16), (1.5, 3), (1.15, 4)] {
+                let halo_alpha = (halo / share) as u8;
+                if halo_alpha == 0 {
+                    continue;
+                }
+                painter.circle_filled(
+                    pos2(x, y),
+                    radius * scale * spread,
+                    with_alpha(text_color, halo_alpha),
+                );
+            }
+        }
+        painter.circle_filled(pos2(x, y), radius * scale, with_alpha(text_color, alpha));
+    }
+    rect
+}
+
 /// A centred lyrics notice, as Spicy shows one in place of the words: a quiet
 /// title, a line of explanation under it, and no icon or card around them.
 /// Returns whether the optional button under it was clicked.
@@ -789,6 +1011,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui, rect: Rect, top_inset: f32, fullsc
         .data_mut(|data| data.remove_temp::<Motion>(motion_id))
         .unwrap_or_default();
     motion.begin(&now.uri);
+    let interludes = interludes(&lyrics);
 
     let active = lyrics.active_line(now.position_ms);
     // A Follow click resets the remembered line after drawing, as the side
@@ -853,7 +1076,35 @@ fn contents(app: &mut App, ui: &mut egui::Ui, rect: Rect, top_inset: f32, fullsc
             ui.add_space(padding);
             let mut measure = Measure::default();
             let mut active_rect = None;
+            let spring_dt = motion.dt * app.settings.spicy_motion.scale();
+            let interlude_at = |after: Option<usize>| {
+                interludes
+                    .iter()
+                    .position(|interlude| interlude.after == after)
+            };
             for (index, line) in lyrics.lines.iter().enumerate() {
+                // The intro counts as an interlude too: long before the first
+                // word, Spicy shows the same three dots.
+                if index == 0
+                    && let Some(ordinal) = interlude_at(None)
+                    && let Some(interlude) = interludes.get(ordinal)
+                {
+                    let rect = draw_interlude(
+                        ui,
+                        Color32::WHITE,
+                        column.left(),
+                        width,
+                        size,
+                        now.position_ms,
+                        ordinal,
+                        interlude,
+                        &mut motion,
+                        spring_dt,
+                    );
+                    if now.position_ms >= interlude.start_ms && now.position_ms < interlude.end_ms {
+                        active_rect = Some(rect);
+                    }
+                }
                 let is_active = active == Some(index);
                 let depth = line_depth(index, active, fullscreen);
                 let rect = draw_line(
@@ -879,6 +1130,27 @@ fn contents(app: &mut App, ui: &mut egui::Ui, rect: Rect, top_inset: f32, fullsc
                     active_rect = Some(rect);
                 }
                 ui.add_space(gap);
+                // An instrumental stretch is its own row, and the row the view
+                // follows while only the music plays.
+                if let Some(ordinal) = interlude_at(Some(index))
+                    && let Some(interlude) = interludes.get(ordinal)
+                {
+                    let rect = draw_interlude(
+                        ui,
+                        Color32::WHITE,
+                        column.left(),
+                        width,
+                        size,
+                        now.position_ms,
+                        ordinal,
+                        interlude,
+                        &mut motion,
+                        spring_dt,
+                    );
+                    if now.position_ms >= interlude.start_ms && now.position_ms < interlude.end_ms {
+                        active_rect = Some(rect);
+                    }
+                }
             }
             if let Some(attribution) = lyrics.attribution.as_ref() {
                 widgets::lyrics_attribution(
@@ -1140,6 +1412,12 @@ impl Spring {
         self.velocity.abs() > 0.0005 || (self.value - self.goal).abs() > 0.0005
     }
 
+    /// Land on the goal at once: still lyrics have no time to travel in.
+    fn settle(&mut self) {
+        self.value = self.goal;
+        self.velocity = 0.0;
+    }
+
     fn step(&mut self, dt: f32, hz: f32, damping: f32) -> f32 {
         if dt <= 0.0 {
             return self.value;
@@ -1195,6 +1473,53 @@ impl Default for Springs {
     }
 }
 
+/// A line's fade and scale, kept between frames so a line change eases
+/// instead of flipping.
+#[derive(Clone, Copy)]
+struct LineSprings {
+    alpha: Spring,
+    scale: Spring,
+}
+
+impl LineSprings {
+    fn at(alpha: f32, scale: f32) -> Self {
+        Self {
+            alpha: Spring::new(alpha),
+            scale: Spring::new(scale),
+        }
+    }
+}
+
+/// One interlude dot's channels: Spicy's dots add opacity to the word set.
+#[derive(Clone, Copy)]
+struct DotSprings {
+    scale: Spring,
+    lift: Spring,
+    glow: Spring,
+    opacity: Spring,
+}
+
+impl DotSprings {
+    fn idle() -> Self {
+        Self {
+            scale: Spring::new(spline(DOT_SCALE, 0.0)),
+            lift: Spring::new(spline(DOT_LIFT, 0.0)),
+            glow: Spring::new(0.0),
+            opacity: Spring::new(spline(DOT_OPACITY, 0.0)),
+        }
+    }
+
+    fn moving(&self) -> bool {
+        self.scale.moving() || self.lift.moving() || self.glow.moving() || self.opacity.moving()
+    }
+}
+
+impl Default for DotSprings {
+    fn default() -> Self {
+        Self::idle()
+    }
+}
+
 /// Per-element spring state for the view. Keeping it in egui's temporary data
 /// lets the side panel, full screen and Now playing preview share one clock.
 #[derive(Clone, Default)]
@@ -1203,6 +1528,8 @@ struct Motion {
     last_frame: Option<Instant>,
     dt: f32,
     springs: HashMap<(u32, u32, u32), Springs>,
+    lines: HashMap<u32, LineSprings>,
+    dots: HashMap<(u32, u32), DotSprings>,
 }
 
 impl Motion {
@@ -1212,6 +1539,8 @@ impl Motion {
             self.uri.clear();
             self.uri.push_str(uri);
             self.springs.clear();
+            self.lines.clear();
+            self.dots.clear();
             self.last_frame = Some(now);
             self.dt = 0.0;
             return;
@@ -1227,6 +1556,11 @@ impl Motion {
         self.springs
             .values()
             .any(|springs| springs.scale.moving() || springs.lift.moving() || springs.glow.moving())
+            || self
+                .lines
+                .values()
+                .any(|line| line.alpha.moving() || line.scale.moving())
+            || self.dots.values().any(DotSprings::moving)
     }
 }
 
@@ -1348,6 +1682,14 @@ fn draw_line(
     // is one line sweep at the line's own pace.
     let precise = lyrics.synced && !line.syllables.is_empty();
     let spring_dt = motion.dt * app.settings.spicy_motion.scale();
+    // A word-synced line stops being sung when its last syllable does, which
+    // is what leaves room for an interlude. A line-synced line runs to the
+    // next one, as it always has.
+    let ended = position
+        >= vocal_end(lyrics, index)
+            .unwrap_or(line_length)
+            .max(line.at_ms.unwrap_or(0));
+    let singing = is_active && !ended;
     let line_progress = if lyrics.synced {
         progress(position, line.at_ms.unwrap_or(0), line_length)
     } else {
@@ -1401,20 +1743,46 @@ fn draw_line(
             with_alpha(text_color, 26),
         );
     }
-    let line_alpha = if !lyrics.synced || hovered || is_active {
+    // The line's own opacity fades between its states instead of switching,
+    // and carries the depth falloff, so a line change eases across the whole
+    // sheet rather than dimming every line in one frame.
+    let alpha_goal = if !lyrics.synced || hovered || singing {
         255.0
-    } else if position >= line_length {
+    } else if ended {
         f32::from(sung_alpha)
     } else {
         f32::from(unsung_alpha)
+    } * if hovered || singing { 1.0 } else { depth };
+    // A line-synced line swells to Spicy's 1.05 while it is sung; word-synced
+    // lines leave that to each word's own springs.
+    let scale_goal = if lyrics.synced && !precise && singing {
+        1.05
+    } else {
+        0.95
     };
-    let line_depth = if hovered || is_active { 1.0 } else { depth };
+    let line_springs = motion
+        .lines
+        .entry(index as u32)
+        .or_insert_with(|| LineSprings::at(alpha_goal, scale_goal));
+    line_springs.alpha.goal = alpha_goal;
+    line_springs.scale.goal = scale_goal;
+    if spring_dt <= 0.0 {
+        line_springs.alpha.settle();
+        line_springs.scale.settle();
+    }
+    let line_alpha = line_springs
+        .alpha
+        .step(spring_dt, LINE_ALPHA_HZ, LINE_ALPHA_DAMPING);
+    let line_scale = line_springs
+        .scale
+        .step(spring_dt, LINE_SCALE_HZ, LINE_SCALE_DAMPING);
+    let fade = (line_alpha / 255.0).clamp(0.0, 1.0);
     // Every line uses the same word slots. An inactive line is the same text
     // at the extension's 0.95 resting scale, with no fill or glow, so becoming
     // active changes colour and motion but never position.
     if !is_active {
         let mut glyphs = Vec::with_capacity(units.len());
-        let idle_font = theme::bold(size * 0.95);
+        let idle_font = animated_font(size * line_scale);
         for (unit_index, unit_x, unit_width, unit_row) in &unit_layout {
             let unit = &units[*unit_index];
             let unit_y = rect.top() + 2.0 + *unit_row as f32 * line_height + size * 0.5;
@@ -1427,8 +1795,8 @@ fn draw_line(
                 0,
                 0.0,
                 false,
-                (line_alpha * line_depth) as u8,
-                line_alpha as u8,
+                line_alpha.round() as u8,
+                line_alpha.round() as u8,
             );
         }
         paint_glyphs(&painter, &glyphs, text_color, rect.top(), ui.clip_rect());
@@ -1458,9 +1826,13 @@ fn draw_line(
     let active_font = if precise {
         font.clone()
     } else {
-        // A line-synced active line takes Spicy's 1.05 scale.
-        animated_font(size * 1.05)
+        // A line-synced active line swells to Spicy's 1.05 on its spring.
+        animated_font(size * line_scale)
     };
+    let word_rest_alpha = (f32::from(WORD_REST_ALPHA) * fade).round() as u8;
+    let word_fill_alpha = (f32::from(WORD_FILL_ALPHA) * fade).round() as u8;
+    let line_rest_alpha = (f32::from(LINE_REST_ALPHA) * fade).round() as u8;
+    let line_fill_alpha = (f32::from(LINE_FILL_ALPHA) * fade).round() as u8;
     for (unit_index, unit_x, unit_width, unit_row) in &unit_layout {
         let unit_x = rect.left() + *unit_x;
         let unit = &units[*unit_index];
@@ -1478,8 +1850,8 @@ fn draw_line(
                 halo_alpha,
                 line_progress,
                 true,
-                LINE_REST_ALPHA,
-                LINE_FILL_ALPHA,
+                line_rest_alpha,
+                line_fill_alpha,
             );
             continue;
         }
@@ -1559,8 +1931,8 @@ fn draw_line(
                     0,
                     fill,
                     false,
-                    WORD_REST_ALPHA,
-                    WORD_FILL_ALPHA,
+                    word_rest_alpha,
+                    word_fill_alpha,
                 );
             }
             // A held word glows as one word. Per-letter halos would put a
@@ -1615,8 +1987,8 @@ fn draw_line(
                 halo_alpha,
                 fill,
                 false,
-                WORD_REST_ALPHA,
-                WORD_FILL_ALPHA,
+                word_rest_alpha,
+                word_fill_alpha,
             );
         }
     }
@@ -1862,6 +2234,171 @@ mod tests {
         assert!((line_depth(30, Some(4), false) - far).abs() < 0.001);
         assert!((far - SIDEBAR_DEPTH_FLOOR).abs() < 0.001);
         assert_eq!(line_depth(4, None, false), 1.0);
+    }
+
+    fn timed_syllables(spans: &[(u32, u32, &str)]) -> Vec<crate::lyrics::Syllable> {
+        spans
+            .iter()
+            .map(|(at, end, text)| crate::lyrics::Syllable {
+                at_ms: *at,
+                end_ms: Some(*end),
+                text: (*text).into(),
+                continues: false,
+            })
+            .collect()
+    }
+
+    fn line(at_ms: u32, syllables: Vec<crate::lyrics::Syllable>) -> crate::lyrics::Line {
+        crate::lyrics::Line {
+            at_ms: Some(at_ms),
+            text: syllables
+                .iter()
+                .map(|syllable| syllable.text.trim())
+                .collect::<Vec<_>>()
+                .join(" "),
+            syllables,
+        }
+    }
+
+    /// A pause of three seconds or more between the last syllable and the
+    /// next line is the interlude Spicy draws; a shorter breath is not.
+    #[test]
+    fn a_long_pause_between_vocals_becomes_an_interlude() {
+        let lyrics = Lyrics {
+            lines: vec![
+                line(1_000, timed_syllables(&[(1_000, 2_000, "gone")])),
+                line(5_000, timed_syllables(&[(5_000, 6_000, "back")])),
+            ],
+            synced: true,
+            ..Lyrics::default()
+        };
+        assert_eq!(
+            interludes(&lyrics),
+            vec![Interlude {
+                after: Some(0),
+                start_ms: 2_000,
+                end_ms: 5_000,
+            }]
+        );
+
+        let lyrics = Lyrics {
+            lines: vec![
+                line(1_000, timed_syllables(&[(1_000, 2_000, "gone")])),
+                line(4_999, timed_syllables(&[(4_999, 5_500, "back")])),
+            ],
+            synced: true,
+            ..Lyrics::default()
+        };
+        assert!(
+            interludes(&lyrics).is_empty(),
+            "a breath is not an interlude"
+        );
+    }
+
+    /// A long intro gets the same dots, before the first line.
+    #[test]
+    fn a_long_intro_gets_the_dots_too() {
+        let lyrics = Lyrics {
+            lines: vec![line(8_000, timed_syllables(&[(8_000, 9_000, "first")]))],
+            synced: true,
+            ..Lyrics::default()
+        };
+        assert_eq!(
+            interludes(&lyrics),
+            vec![Interlude {
+                after: None,
+                start_ms: 0,
+                end_ms: 8_000,
+            }]
+        );
+    }
+
+    /// Line-synced lyrics end where the next line starts, so they carry no
+    /// instrumental gap to draw dots in.
+    #[test]
+    fn line_synced_lyrics_have_no_interludes() {
+        let lyrics = Lyrics {
+            lines: vec![line(1_000, Vec::new()), line(9_000, Vec::new())],
+            synced: true,
+            ..Lyrics::default()
+        };
+        assert!(interludes(&lyrics).is_empty());
+    }
+
+    /// The three dots take their turns one after another, and the group is
+    /// done before the next vocal, so it can fade out on time.
+    #[test]
+    fn the_three_dots_take_their_turns_inside_the_interlude() {
+        let interlude = Interlude {
+            after: None,
+            start_ms: 10_000,
+            end_ms: 16_000,
+        };
+        let [first, second, third] = dot_spans(&interlude);
+        assert_eq!(first.0, 10_000);
+        assert_eq!(first.1, second.0, "one dot follows the last");
+        assert_eq!(second.1, third.0);
+        assert!(third.1 < 16_000, "the dots finish before the vocal");
+        assert_eq!(third.1, 16_000 - DOT_PRE_HIDDEN_MS - 50);
+    }
+
+    /// The dot line begins at the words' left edge instead of sitting in the
+    /// middle of the row.
+    #[test]
+    fn the_dots_sit_at_the_start_of_the_row() {
+        let rect = Rect::from_min_size(pos2(120.0, 40.0), vec2(600.0, 38.0));
+        let centres = dot_centres(rect, 6.0, 19.0);
+        assert_eq!(centres[0].x, 126.0, "the first dot's edge is the text edge");
+        assert_eq!(centres[1].x - centres[0].x, 19.0);
+        assert_eq!(centres[2].x - centres[1].x, 19.0);
+        assert!(centres.iter().all(|centre| centre.y == rect.center().y));
+        assert!(
+            centres[2].x < rect.center().x,
+            "the group no longer straddles the middle: {centres:?}"
+        );
+    }
+
+    /// A line does not switch between its states in one frame: its opacity
+    /// travels, which is what makes a line change read as a breath.
+    #[test]
+    fn a_line_fades_between_states_instead_of_switching() {
+        let mut line = LineSprings::at(255.0, 0.95);
+        line.alpha.goal = 127.0;
+        let after_one_frame = line
+            .alpha
+            .step(1.0 / 60.0, LINE_ALPHA_HZ, LINE_ALPHA_DAMPING);
+        assert!(
+            after_one_frame < 255.0 && after_one_frame > 127.0,
+            "the fade moves rather than jumps: {after_one_frame}"
+        );
+        for _ in 0..180 {
+            line.alpha
+                .step(1.0 / 60.0, LINE_ALPHA_HZ, LINE_ALPHA_DAMPING);
+        }
+        assert!(
+            (line.alpha.value - 127.0).abs() < 0.5,
+            "and it lands on the sung line: {}",
+            line.alpha.value
+        );
+    }
+
+    /// The dots arrive from Spicy's resting pose, not at full size in one go.
+    #[test]
+    fn a_dot_swells_into_its_turn() {
+        let mut dot = DotSprings::idle();
+        dot.opacity.goal = spline(DOT_OPACITY, 1.0);
+        dot.scale.goal = spline(DOT_SCALE, 0.7);
+        let first = dot
+            .opacity
+            .step(1.0 / 60.0, DOT_OPACITY_HZ, DOT_OPACITY_DAMPING);
+        assert!(first > 0.35 && first < 1.0, "the dot eases in: {first}");
+        for _ in 0..120 {
+            dot.opacity
+                .step(1.0 / 60.0, DOT_OPACITY_HZ, DOT_OPACITY_DAMPING);
+            dot.scale.step(1.0 / 60.0, DOT_SCALE_HZ, DOT_SCALE_DAMPING);
+        }
+        assert!(dot.opacity.value > 0.99);
+        assert!((dot.scale.value - spline(DOT_SCALE, 0.7)).abs() < 0.01);
     }
 
     #[test]

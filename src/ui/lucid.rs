@@ -72,8 +72,23 @@ pub fn border(app: &App) -> Stroke {
     let outline = app.palette.outline;
     Stroke::new(
         1.0,
-        Color32::from_rgba_unmultiplied(outline.r(), outline.g(), outline.b(), 145),
+        Color32::from_rgba_unmultiplied(
+            outline.r(),
+            outline.g(),
+            outline.b(),
+            border_alpha(app.settings.lucid_background),
+        ),
     )
+}
+
+/// How firm that hairline is. Over the cover the artwork already separates
+/// the cards; on the clean background the line is the only edge they have, so
+/// it is drawn at nearly full strength.
+fn border_alpha(background: LucidBackground) -> u8 {
+    match background {
+        LucidBackground::Cover => 145,
+        LucidBackground::Dark => 235,
+    }
 }
 
 pub fn shadow(app: &App) -> Shadow {
@@ -412,6 +427,17 @@ mod tests {
             assert!(clear >= 80, "text stays legible over the cover");
             assert!(dark || clear >= 160, "light glass keeps its contrast");
         }
+    }
+
+    /// The clean background's cards are separated by their hairline alone, so
+    /// it is drawn more firmly than over the cover.
+    #[test]
+    fn the_clean_background_draws_a_firmer_border() {
+        let cover = border_alpha(LucidBackground::Cover);
+        let dark = border_alpha(LucidBackground::Dark);
+        assert!(dark > cover, "the clean cards need their own edge");
+        assert!(cover >= 120, "the cover's hairline still shows");
+        assert!(dark >= 200, "the clean hairline is not a whisper");
     }
 
     /// The backdrop crops rather than stretches: a wide cover fills a tall
