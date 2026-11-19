@@ -5,3 +5,10 @@ rustflags = ["-C", "target-feature=+crt-static"]
 
 [target.aarch64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]
+
+# projectm-sys (MilkDrop) links libprojectM from <cmake prefix>/lib, while
+# CMake's GNUInstallDirs installs to lib64 on RPM-based systems such as
+# Fedora. The toolchain file pins the install directory the crate reads.
+# Drop this once projectm-sys finds the library's actual install directory.
+[env]
+CMAKE_TOOLCHAIN_FILE = { value = "packaging/cmake/linux-libdir.cmake", relative = true }

@@ -231,6 +231,14 @@ sudo dnf install alsa-lib-devel pipewire-devel libxkbcommon-devel \
   wayland-devel cmake clang clang-devel
 ```
 
+Fedora installs libraries to `lib64`, while `projectm-sys` looks for
+libprojectM in `lib`. The checkout's `.cargo/config.toml` points CMake at
+`packaging/cmake/linux-libdir.cmake`, which pins the install directory, so
+builds from inside the checkout, including `./update.sh`, find the library.
+`cargo install --git` builds a copy outside the checkout and does not read
+that file, so it still fails on Fedora; build from a clone instead, or install
+the RPM package.
+
 On Windows, libprojectM is built with Visual Studio 2022, CMake, LLVM, and
 vcpkg (`vcpkg install glew:x64-windows-static`, with
 `VCPKG_INSTALLATION_ROOT` pointing at the vcpkg folder).
