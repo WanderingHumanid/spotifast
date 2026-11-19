@@ -226,6 +226,17 @@ Library sidebar to start playing it. A single click still opens the row's page.
 Pointing at a row's cover art also shows a play button, but only when the
 sidebar is not in compact mode.
 
+## Search
+
+The Search page follows Spotify's own layout: a large **Search** heading and
+field, then **Browse all**, a grid of coloured genre and mood tiles. Choosing a
+tile searches for it. Recent searches sit above the grid, each with a cross
+that forgets just that query. The page's field and the top bar's search box
+edit the same query; typing in either searches as you type, and `Enter` runs it
+at once. Results keep Spotify's shape: a top result beside the first songs,
+then Artists, Albums, Playlists and Podcasts shelves, with filter chips for
+All, Songs, Artists, Albums, Playlists, Podcasts and Episodes.
+
 ## Playing a song from search
 
 A song picked from the search results plays on its own, and, with Autoplay on,
@@ -851,7 +862,9 @@ hand pauses following. The view asks for frames only while the song plays.
 
 When the words stop for three seconds or more and only the music plays, the
 column draws Spicy Lyrics' interlude: three dots that swell, lift and glow in
-turn, then fade out before the next word arrives. Lines fade between their
+turn, then fade out before the next word arrives. The pause takes no room in
+the sheet until the words reach it: its gap opens as the vocals stop and closes
+again before the next line, so no blank stretches sit between the lines. Lines fade between their
 states instead of switching, so passing from one line to the next reads as a
 breath.
 

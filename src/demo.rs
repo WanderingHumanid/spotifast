@@ -2074,6 +2074,14 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
                     results.artists = None;
                 }
             }
+            // Search before anything is typed: recent searches and the
+            // browse grid, as Spotify's search page opens.
+            "search-browse" => {
+                app.open(Page::Search);
+                app.search.query.clear();
+                app.search.committed.clear();
+                app.search.typed_at = None;
+            }
             "finite-playlist" => {
                 if let Some(page) = app.playlist_pages.get_mut("pl1") {
                     let seed = page.items.items.clone();
@@ -4989,6 +4997,29 @@ mod tests {
             app.search.committed.is_empty(),
             "the cross must forget a query without running it"
         );
+        app.backend.shutdown();
+    }
+
+    /// The Search page opens on Spotify's browse grid when nothing is typed,
+    /// and a tile runs the search for its genre.
+    #[test]
+    fn the_search_page_offers_browse_categories() {
+        use egui::accesskit::{Action as AccessibleAction, Role};
+        let (ctx, mut app) = accessible_app("search-browse");
+        app.open(Page::Search);
+        app.search.query.clear();
+        app.search.committed.clear();
+        app.search.typed_at = None;
+        app.settings.search_history.clear();
+        accessible_frame(&ctx, &mut app, vec![]);
+        let tree = accessible_frame(&ctx, &mut app, vec![]);
+        let pop = accessible_node(&tree, "Pop", Role::Button);
+        accessible_frame(
+            &ctx,
+            &mut app,
+            vec![accessible_action(pop, AccessibleAction::Click, None)],
+        );
+        assert_eq!(app.search.query, "Pop", "a tile searches its genre");
         app.backend.shutdown();
     }
 
@@ -8376,9 +8407,12 @@ mod tests {
             app.saved.clear();
             search_frame(&ctx, &mut app, vec![]);
             let text = search_frame(&ctx, &mut app, vec![]);
+            // The page's search field paints the same query, so take the
+            // largest rendering: the top result's 26 px title.
             let pos = text
                 .iter()
-                .find(|(text, _)| text == &title)
+                .filter(|(text, _)| text == &title)
+                .max_by(|a, b| a.1.height().total_cmp(&b.1.height()))
                 .expect("top result title")
                 .1
                 .center();
@@ -8463,9 +8497,12 @@ mod tests {
         ] {
             search_frame(&ctx, &mut app, vec![]);
             let text = search_frame(&ctx, &mut app, vec![]);
+            // The page's search field paints the same query, so take the
+            // largest rendering: the top result's 26 px title.
             let pos = text
                 .iter()
-                .find(|(text, _)| text == &title)
+                .filter(|(text, _)| text == &title)
+                .max_by(|a, b| a.1.height().total_cmp(&b.1.height()))
                 .expect("top result title")
                 .1
                 .center();

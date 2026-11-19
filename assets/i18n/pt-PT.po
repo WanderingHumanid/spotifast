@@ -6,7 +6,7 @@ msgstr ""
 "Project-Id-Version: Spotifast\n"
 "Report-Msgid-Bugs-To: https://github.com/crmne/spotifast/issues/new?"
 "template=translation.yml\n"
-"POT-Creation-Date: 2026-11-17 15:31+0530\n"
+"POT-Creation-Date: 2026-11-19 16:45+0530\n"
 "PO-Revision-Date: 2026-09-23 20:00+0000\n"
 "Last-Translator: Spotifast contributors\n"
 "Language-Team: European Portuguese\n"
@@ -34,8 +34,8 @@ msgid "Playlist"
 msgstr "Playlist"
 
 #: src/ui/sidebar.rs:312 src/ui/friends.rs:314 src/ui/widgets.rs:1155
-#: src/app.rs:4146 src/app.rs:26412 src/ui/collection.rs:2576 src/ui/home.rs:93
-#: src/ui/keys.rs:378 src/ui/winamp/playlist.rs:653
+#: src/app.rs:4146 src/app.rs:26412 src/ui/collection.rs:2576
+#: src/ui/home.rs:116 src/ui/keys.rs:378 src/ui/winamp/playlist.rs:653
 msgid "Liked Songs"
 msgstr "Músicas de que gostas"
 
@@ -43,8 +43,8 @@ msgstr "Músicas de que gostas"
 msgid "Library order"
 msgstr "Ordem da biblioteca"
 
-#: src/ui/sidebar.rs:356 src/ui/home.rs:521 src/ui/home.rs:531
-#: src/ui/home.rs:558
+#: src/ui/sidebar.rs:356 src/ui/home.rs:550 src/ui/home.rs:560
+#: src/ui/home.rs:587
 msgid "Recently played"
 msgstr "Reproduzidos recentemente"
 
@@ -73,7 +73,7 @@ msgid "Folder"
 msgstr "Pasta"
 
 #. Translators: {owner} is the name of the playlist's owner.
-#: src/ui/sidebar.rs:1102 src/ui/search.rs:228
+#: src/ui/sidebar.rs:1102 src/ui/search.rs:387
 #, rust-format
 msgid "Playlist • {owner}"
 msgstr "Playlist • {owner}"
@@ -84,6 +84,7 @@ msgid "Home"
 msgstr "Início"
 
 #: src/ui/sidebar.rs:1171 src/app.rs:9711 src/ui/keys.rs:357
+#: src/ui/search.rs:92
 msgid "Search"
 msgstr "Pesquisar"
 
@@ -111,22 +112,22 @@ msgstr "Pesquisar na biblioteca"
 msgid "Library"
 msgstr "Biblioteca"
 
-#: src/ui/sidebar.rs:1287 src/app.rs:9685 src/model.rs:807 src/ui/search.rs:668
+#: src/ui/sidebar.rs:1287 src/app.rs:9685 src/model.rs:807 src/ui/search.rs:827
 msgid "Playlists"
 msgstr "Playlists"
 
 #: src/ui/sidebar.rs:1288 src/model.rs:806 src/model.rs:940
-#: src/ui/library.rs:17 src/ui/search.rs:595
+#: src/ui/library.rs:17 src/ui/search.rs:754
 msgid "Albums"
 msgstr "Álbuns"
 
 #: src/ui/sidebar.rs:1289 src/model.rs:805 src/ui/library.rs:22
-#: src/ui/search.rs:527
+#: src/ui/search.rs:686
 msgid "Artists"
 msgstr "Artistas"
 
 #: src/ui/sidebar.rs:1290 src/model.rs:808 src/ui/library.rs:27
-#: src/ui/search.rs:719
+#: src/ui/search.rs:878
 msgid "Podcasts"
 msgstr "Podcasts"
 
@@ -140,14 +141,14 @@ msgid "Search in Your Library"
 msgstr "Pesquisar na tua biblioteca"
 
 #: src/ui/sidebar.rs:1435 src/ui/widgets.rs:1585 src/app.rs:4207
-#: src/ui/artist.rs:267 src/ui/artist.rs:462 src/ui/home.rs:795
-#: src/ui/library.rs:101 src/ui/search.rs:159 src/ui/search.rs:491
+#: src/ui/artist.rs:267 src/ui/artist.rs:462 src/ui/home.rs:824
+#: src/ui/library.rs:101 src/ui/search.rs:318 src/ui/search.rs:650
 #: src/ui/winamp/playlist.rs:746
 msgid "Artist"
 msgstr "Artista"
 
 #. Translators: {publisher} is the podcast's publisher.
-#: src/ui/sidebar.rs:1470 src/ui/search.rs:253
+#: src/ui/sidebar.rs:1470 src/ui/search.rs:412
 #, rust-format
 msgid "Podcast • {publisher}"
 msgstr "Podcast • {publisher}"
@@ -166,7 +167,7 @@ msgstr "Ordenar por reproduzidos recentemente"
 
 #: src/ui/sidebar.rs:2180 src/ui/player_bar.rs:846 src/ui/widgets.rs:1627
 #: src/ui/artist.rs:544 src/ui/collection.rs:375 src/ui/new_releases.rs:117
-#: src/ui/prerelease.rs:365 src/ui/search.rs:408 src/ui/show.rs:390
+#: src/ui/prerelease.rs:365 src/ui/search.rs:567 src/ui/show.rs:390
 msgid "Play"
 msgstr "Reproduzir"
 
@@ -256,8 +257,8 @@ msgstr "Ordem aleatória"
 msgid "Previous"
 msgstr "Anterior"
 
-#: src/ui/player_bar.rs:822 src/ui/lyrics.rs:491 src/ui/widgets.rs:3238
-#: src/ui/widgets.rs:3311 src/ui/widgets.rs:3339 src/app.rs:15477
+#: src/ui/player_bar.rs:822 src/ui/lyrics.rs:491 src/ui/widgets.rs:3255
+#: src/ui/widgets.rs:3328 src/ui/widgets.rs:3356 src/app.rs:15477
 #: src/ui/collection.rs:1025
 msgid "Loading…"
 msgstr "A carregar…"
@@ -375,7 +376,7 @@ msgstr "A seguir"
 msgid "Next up"
 msgstr "Depois"
 
-#: src/ui/queue.rs:625 src/ui/queue.rs:658 src/ui/widgets.rs:3373
+#: src/ui/queue.rs:625 src/ui/queue.rs:658 src/ui/widgets.rs:3390
 #: src/ui/collection.rs:1404 src/ui/prerelease.rs:283
 msgid "Retry"
 msgstr "Tentar novamente"
@@ -406,7 +407,7 @@ msgstr "Reproduz uma música para veres a letra."
 #: src/ui/collection.rs:2064 src/ui/collection.rs:2090
 #: src/ui/collection.rs:2154 src/ui/collection.rs:2271
 #: src/ui/collection.rs:2297 src/ui/collection.rs:2556 src/ui/home.rs:25
-#: src/ui/library.rs:259 src/ui/search.rs:91 src/ui/show.rs:66
+#: src/ui/library.rs:259 src/ui/search.rs:135 src/ui/show.rs:66
 #: src/ui/show.rs:112 src/ui/show.rs:142
 msgid "You're offline"
 msgstr "Estás offline"
@@ -681,53 +682,53 @@ msgstr "REPRODUÇÕES"
 msgid "Sort by duration"
 msgstr "Ordenar por duração"
 
-#: src/ui/widgets.rs:3350 src/app.rs:15686 src/app.rs:15700
+#: src/ui/widgets.rs:3367 src/app.rs:15686 src/app.rs:15700
 msgid "Network connection error. Check your connection."
 msgstr "Erro de ligação à rede. Verifica a ligação."
 
-#: src/ui/widgets.rs:3672
+#: src/ui/widgets.rs:3689
 msgid "Cut"
 msgstr "Cortar"
 
-#: src/ui/widgets.rs:3677 src/ui/login.rs:586
+#: src/ui/widgets.rs:3694 src/ui/login.rs:586
 msgid "Copy"
 msgstr "Copiar"
 
-#: src/ui/widgets.rs:3682
+#: src/ui/widgets.rs:3699
 msgid "Paste"
 msgstr "Colar"
 
-#: src/ui/widgets.rs:3699
+#: src/ui/widgets.rs:3716
 msgid "Select all"
 msgstr "Selecionar tudo"
 
-#: src/ui/widgets.rs:3806 src/ui/settings.rs:1943
+#: src/ui/widgets.rs:3840 src/ui/settings.rs:1943
 msgid "Clear"
 msgstr "Limpar"
 
 #. Translators: {name} is replaced by the author's name, shown as a link.
-#: src/ui/widgets.rs:3851
+#: src/ui/widgets.rs:3885
 #, rust-format
 msgid "Built with love by {name}"
 msgstr "Feito com amor por {name}"
 
-#: src/ui/widgets.rs:4011
+#: src/ui/widgets.rs:4045
 msgid "Host"
 msgstr "Host"
 
-#: src/ui/widgets.rs:4028
+#: src/ui/widgets.rs:4062
 msgid "Port"
 msgstr "Porta"
 
-#: src/ui/widgets.rs:4046
+#: src/ui/widgets.rs:4080
 msgid "Username"
 msgstr "Nome de utilizador"
 
-#: src/ui/widgets.rs:4057
+#: src/ui/widgets.rs:4091
 msgid "Password"
 msgstr "Palavra-passe"
 
-#: src/ui/widgets.rs:4075
+#: src/ui/widgets.rs:4109
 msgid ""
 "Proxy login applies to Web requests. Local playback uses this proxy only "
 "without a login."
@@ -735,7 +736,7 @@ msgstr ""
 "As credenciais do proxy aplicam-se aos pedidos Web. A reprodução local só "
 "usa este proxy sem credenciais."
 
-#: src/ui/widgets.rs:4079
+#: src/ui/widgets.rs:4113
 msgid ""
 "Spotify hostnames are resolved by the proxy. Local playback connects "
 "directly."
@@ -2876,11 +2877,11 @@ msgctxt "filter"
 msgid "All"
 msgstr "Tudo"
 
-#: src/model.rs:804 src/ui/search.rs:443
+#: src/model.rs:804 src/ui/search.rs:602
 msgid "Songs"
 msgstr "Músicas"
 
-#: src/model.rs:809 src/ui/library.rs:32 src/ui/search.rs:286
+#: src/model.rs:809 src/ui/library.rs:32 src/ui/search.rs:445
 msgid "Episodes"
 msgstr "Episódios"
 
@@ -3063,7 +3064,7 @@ msgstr "Ainda não há nada aqui"
 msgid "Added songs appear here."
 msgstr "As músicas adicionadas aparecem aqui."
 
-#: src/ui/collection.rs:1810 src/ui/home.rs:909
+#: src/ui/collection.rs:1810 src/ui/home.rs:938
 msgid "Your top songs"
 msgstr "As tuas músicas mais ouvidas"
 
@@ -3348,49 +3349,49 @@ msgstr "Descrição opcional"
 msgid "Save"
 msgstr "Guardar"
 
-#: src/ui/home.rs:346
+#: src/ui/home.rs:375
 msgid "Made for you"
 msgstr "Feito para ti"
 
-#: src/ui/home.rs:375
+#: src/ui/home.rs:404
 msgid "Your top mixes"
 msgstr "Os teus mixes mais ouvidos"
 
-#: src/ui/home.rs:396 src/ui/new_releases.rs:25
+#: src/ui/home.rs:425 src/ui/new_releases.rs:25
 msgid "New releases"
 msgstr "Novidades"
 
 #. Translators: {owner} is the name of the playlist's owner.
-#: src/ui/home.rs:468 src/ui/search.rs:623
+#: src/ui/home.rs:497 src/ui/search.rs:782
 #, rust-format
 msgid "By {owner}"
 msgstr "De {owner}"
 
-#: src/ui/home.rs:695
+#: src/ui/home.rs:724
 msgid "Your podcasts"
 msgstr "Os teus podcasts"
 
 #. Translators: {time} is the time left in an episode, such as 12 min; {show} is the podcast's name.
-#: src/ui/home.rs:701
+#: src/ui/home.rs:730
 #, rust-format
 msgid "{time} left • {show}"
 msgstr "Faltam {time} • {show}"
 
 #. Translators: {show} is the podcast's name.
-#: src/ui/home.rs:710
+#: src/ui/home.rs:739
 #, rust-format
 msgid "New • {show}"
 msgstr "Novo • {show}"
 
-#: src/ui/home.rs:758 src/ui/home.rs:768 src/ui/home.rs:783
+#: src/ui/home.rs:787 src/ui/home.rs:797 src/ui/home.rs:812
 msgid "Your top artists"
 msgstr "Os teus artistas mais ouvidos"
 
-#: src/ui/home.rs:910
+#: src/ui/home.rs:939
 msgid "Show more top songs"
 msgstr "Mostrar mais músicas mais ouvidas"
 
-#: src/ui/home.rs:987
+#: src/ui/home.rs:1016
 msgid "Recommended for you"
 msgstr "Recomendado para ti"
 
@@ -3865,44 +3866,44 @@ msgid "With {first}, {second}, {third} and more"
 msgstr "Com {first}, {second}, {third} e mais"
 
 #. Translators: {query} is the text the user searched for.
-#: src/ui/search.rs:66
+#: src/ui/search.rs:68
 #, rust-format
 msgid "No results for “{query}”"
 msgstr "Sem resultados para “{query}”"
 
-#: src/ui/search.rs:68
+#: src/ui/search.rs:70
 msgid "Check the spelling, or try fewer words."
 msgstr "Verifica a ortografia ou experimenta menos palavras."
 
-#: src/ui/search.rs:94
+#: src/ui/search.rs:109 src/ui/topbar.rs:397
+msgid "What do you want to play?"
+msgstr "O que queres ouvir?"
+
+#: src/ui/search.rs:138
 msgid "Connect to the internet to search songs, artists, and playlists."
 msgstr ""
 "Liga-te à Internet para pesquisar músicas, artistas e listas de reprodução."
 
-#: src/ui/search.rs:104 src/ui/winamp/playlist.rs:647
-msgid "Search Spotify"
-msgstr "Pesquisar no Spotify"
-
-#: src/ui/search.rs:107
-msgid "Find songs, artists, albums, playlists, and podcasts."
-msgstr "Encontra músicas, artistas, álbuns, playlists e podcasts."
-
-#: src/ui/search.rs:112
+#: src/ui/search.rs:144
 msgid "Recent searches"
 msgstr "Pesquisas recentes"
 
-#: src/ui/search.rs:151
+#: src/ui/search.rs:174
+msgid "Browse all"
+msgstr "Explorar tudo"
+
+#: src/ui/search.rs:310
 msgid "Top result"
 msgstr "Melhor resultado"
 
 #. Translators: {artists} is the album's artist names.
-#: src/ui/search.rs:202
+#: src/ui/search.rs:361
 #, rust-format
 msgid "Album • {artists}"
 msgstr "Álbum • {artists}"
 
 #. Translators: Precedes the song's artist names, which follow as links.
-#: src/ui/search.rs:367
+#: src/ui/search.rs:526
 msgid "Song • "
 msgstr "Música • "
 
@@ -3975,10 +3976,6 @@ msgstr "A transferir a atualização…"
 #, rust-format
 msgid "Update to {version}"
 msgstr "Atualizar para {version}"
-
-#: src/ui/topbar.rs:397
-msgid "What do you want to play?"
-msgstr "O que queres ouvir?"
 
 #: src/ui/topbar.rs:577
 msgid ""
@@ -4156,6 +4153,10 @@ msgstr "Ir para: {position}/{duration} ({percent}%)"
 #: src/ui/winamp/mod.rs:1588
 msgid "Open the big window"
 msgstr "Abrir a janela grande"
+
+#: src/ui/winamp/playlist.rs:647
+msgid "Search Spotify"
+msgstr "Pesquisar no Spotify"
 
 #: src/ui/winamp/playlist.rs:671
 msgid "Remove selected"
@@ -4392,6 +4393,9 @@ msgstr ""
 "recente, e este PC ou máquina virtual não o disponibiliza. Instale o "
 "controlador gráfico ou ative a aceleração por GPU da máquina virtual. Abrir "
 "{url} para saber mais?"
+
+#~ msgid "Find songs, artists, albums, playlists, and podcasts."
+#~ msgstr "Encontra músicas, artistas, álbuns, playlists e podcasts."
 
 #~ msgctxt "column"
 #~ msgid "Title"

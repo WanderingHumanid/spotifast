@@ -6,7 +6,7 @@ msgstr ""
 "Project-Id-Version: Spotifast\n"
 "Report-Msgid-Bugs-To: https://github.com/crmne/spotifast/issues/new?"
 "template=translation.yml\n"
-"POT-Creation-Date: 2026-11-17 15:31+0530\n"
+"POT-Creation-Date: 2026-11-19 16:45+0530\n"
 "PO-Revision-Date: 2026-09-09 13:30+0000\n"
 "Last-Translator: Spotifast contributors\n"
 "Language-Team: Japanese\n"
@@ -34,8 +34,8 @@ msgid "Playlist"
 msgstr "プレイリスト"
 
 #: src/ui/sidebar.rs:312 src/ui/friends.rs:314 src/ui/widgets.rs:1155
-#: src/app.rs:4146 src/app.rs:26412 src/ui/collection.rs:2576 src/ui/home.rs:93
-#: src/ui/keys.rs:378 src/ui/winamp/playlist.rs:653
+#: src/app.rs:4146 src/app.rs:26412 src/ui/collection.rs:2576
+#: src/ui/home.rs:116 src/ui/keys.rs:378 src/ui/winamp/playlist.rs:653
 msgid "Liked Songs"
 msgstr "お気に入りの曲"
 
@@ -43,8 +43,8 @@ msgstr "お気に入りの曲"
 msgid "Library order"
 msgstr "ライブラリ順"
 
-#: src/ui/sidebar.rs:356 src/ui/home.rs:521 src/ui/home.rs:531
-#: src/ui/home.rs:558
+#: src/ui/sidebar.rs:356 src/ui/home.rs:550 src/ui/home.rs:560
+#: src/ui/home.rs:587
 msgid "Recently played"
 msgstr "最近再生した順"
 
@@ -73,7 +73,7 @@ msgid "Folder"
 msgstr "フォルダ"
 
 #. Translators: {owner} is the name of the playlist's owner.
-#: src/ui/sidebar.rs:1102 src/ui/search.rs:228
+#: src/ui/sidebar.rs:1102 src/ui/search.rs:387
 #, rust-format
 msgid "Playlist • {owner}"
 msgstr "プレイリスト • {owner}"
@@ -84,6 +84,7 @@ msgid "Home"
 msgstr "ホーム"
 
 #: src/ui/sidebar.rs:1171 src/app.rs:9711 src/ui/keys.rs:357
+#: src/ui/search.rs:92
 msgid "Search"
 msgstr "検索"
 
@@ -111,22 +112,22 @@ msgstr "ライブラリを検索"
 msgid "Library"
 msgstr "ライブラリ"
 
-#: src/ui/sidebar.rs:1287 src/app.rs:9685 src/model.rs:807 src/ui/search.rs:668
+#: src/ui/sidebar.rs:1287 src/app.rs:9685 src/model.rs:807 src/ui/search.rs:827
 msgid "Playlists"
 msgstr "プレイリスト"
 
 #: src/ui/sidebar.rs:1288 src/model.rs:806 src/model.rs:940
-#: src/ui/library.rs:17 src/ui/search.rs:595
+#: src/ui/library.rs:17 src/ui/search.rs:754
 msgid "Albums"
 msgstr "アルバム"
 
 #: src/ui/sidebar.rs:1289 src/model.rs:805 src/ui/library.rs:22
-#: src/ui/search.rs:527
+#: src/ui/search.rs:686
 msgid "Artists"
 msgstr "アーティスト"
 
 #: src/ui/sidebar.rs:1290 src/model.rs:808 src/ui/library.rs:27
-#: src/ui/search.rs:719
+#: src/ui/search.rs:878
 msgid "Podcasts"
 msgstr "ポッドキャスト"
 
@@ -140,14 +141,14 @@ msgid "Search in Your Library"
 msgstr "ライブラリ内を検索"
 
 #: src/ui/sidebar.rs:1435 src/ui/widgets.rs:1585 src/app.rs:4207
-#: src/ui/artist.rs:267 src/ui/artist.rs:462 src/ui/home.rs:795
-#: src/ui/library.rs:101 src/ui/search.rs:159 src/ui/search.rs:491
+#: src/ui/artist.rs:267 src/ui/artist.rs:462 src/ui/home.rs:824
+#: src/ui/library.rs:101 src/ui/search.rs:318 src/ui/search.rs:650
 #: src/ui/winamp/playlist.rs:746
 msgid "Artist"
 msgstr "アーティスト"
 
 #. Translators: {publisher} is the podcast's publisher.
-#: src/ui/sidebar.rs:1470 src/ui/search.rs:253
+#: src/ui/sidebar.rs:1470 src/ui/search.rs:412
 #, rust-format
 msgid "Podcast • {publisher}"
 msgstr "ポッドキャスト • {publisher}"
@@ -166,7 +167,7 @@ msgstr "最近再生した順に並べ替え"
 
 #: src/ui/sidebar.rs:2180 src/ui/player_bar.rs:846 src/ui/widgets.rs:1627
 #: src/ui/artist.rs:544 src/ui/collection.rs:375 src/ui/new_releases.rs:117
-#: src/ui/prerelease.rs:365 src/ui/search.rs:408 src/ui/show.rs:390
+#: src/ui/prerelease.rs:365 src/ui/search.rs:567 src/ui/show.rs:390
 msgid "Play"
 msgstr "再生"
 
@@ -252,8 +253,8 @@ msgstr "シャッフル"
 msgid "Previous"
 msgstr "前へ"
 
-#: src/ui/player_bar.rs:822 src/ui/lyrics.rs:491 src/ui/widgets.rs:3238
-#: src/ui/widgets.rs:3311 src/ui/widgets.rs:3339 src/app.rs:15477
+#: src/ui/player_bar.rs:822 src/ui/lyrics.rs:491 src/ui/widgets.rs:3255
+#: src/ui/widgets.rs:3328 src/ui/widgets.rs:3356 src/app.rs:15477
 #: src/ui/collection.rs:1025
 msgid "Loading…"
 msgstr "読み込み中…"
@@ -371,7 +372,7 @@ msgstr "次に再生"
 msgid "Next up"
 msgstr "このあと再生"
 
-#: src/ui/queue.rs:625 src/ui/queue.rs:658 src/ui/widgets.rs:3373
+#: src/ui/queue.rs:625 src/ui/queue.rs:658 src/ui/widgets.rs:3390
 #: src/ui/collection.rs:1404 src/ui/prerelease.rs:283
 msgid "Retry"
 msgstr "再試行"
@@ -402,7 +403,7 @@ msgstr "曲を再生すると歌詞が表示されます。"
 #: src/ui/collection.rs:2064 src/ui/collection.rs:2090
 #: src/ui/collection.rs:2154 src/ui/collection.rs:2271
 #: src/ui/collection.rs:2297 src/ui/collection.rs:2556 src/ui/home.rs:25
-#: src/ui/library.rs:259 src/ui/search.rs:91 src/ui/show.rs:66
+#: src/ui/library.rs:259 src/ui/search.rs:135 src/ui/show.rs:66
 #: src/ui/show.rs:112 src/ui/show.rs:142
 msgid "You're offline"
 msgstr "オフラインです"
@@ -674,53 +675,53 @@ msgstr "再生回数"
 msgid "Sort by duration"
 msgstr "再生時間で並べ替え"
 
-#: src/ui/widgets.rs:3350 src/app.rs:15686 src/app.rs:15700
+#: src/ui/widgets.rs:3367 src/app.rs:15686 src/app.rs:15700
 msgid "Network connection error. Check your connection."
 msgstr "ネットワーク接続エラーです。接続を確認してください。"
 
-#: src/ui/widgets.rs:3672
+#: src/ui/widgets.rs:3689
 msgid "Cut"
 msgstr "切り取り"
 
-#: src/ui/widgets.rs:3677 src/ui/login.rs:586
+#: src/ui/widgets.rs:3694 src/ui/login.rs:586
 msgid "Copy"
 msgstr "コピー"
 
-#: src/ui/widgets.rs:3682
+#: src/ui/widgets.rs:3699
 msgid "Paste"
 msgstr "貼り付け"
 
-#: src/ui/widgets.rs:3699
+#: src/ui/widgets.rs:3716
 msgid "Select all"
 msgstr "すべて選択"
 
-#: src/ui/widgets.rs:3806 src/ui/settings.rs:1943
+#: src/ui/widgets.rs:3840 src/ui/settings.rs:1943
 msgid "Clear"
 msgstr "クリア"
 
 #. Translators: {name} is replaced by the author's name, shown as a link.
-#: src/ui/widgets.rs:3851
+#: src/ui/widgets.rs:3885
 #, rust-format
 msgid "Built with love by {name}"
 msgstr "{name}が心を込めて制作"
 
-#: src/ui/widgets.rs:4011
+#: src/ui/widgets.rs:4045
 msgid "Host"
 msgstr "ホスト"
 
-#: src/ui/widgets.rs:4028
+#: src/ui/widgets.rs:4062
 msgid "Port"
 msgstr "ポート"
 
-#: src/ui/widgets.rs:4046
+#: src/ui/widgets.rs:4080
 msgid "Username"
 msgstr "ユーザー名"
 
-#: src/ui/widgets.rs:4057
+#: src/ui/widgets.rs:4091
 msgid "Password"
 msgstr "パスワード"
 
-#: src/ui/widgets.rs:4075
+#: src/ui/widgets.rs:4109
 msgid ""
 "Proxy login applies to Web requests. Local playback uses this proxy only "
 "without a login."
@@ -728,7 +729,7 @@ msgstr ""
 "プロキシのログイン情報はWebリクエストに適用されます。ローカル再生では、ログイ"
 "ン情報がない場合のみこのプロキシを使用します。"
 
-#: src/ui/widgets.rs:4079
+#: src/ui/widgets.rs:4113
 msgid ""
 "Spotify hostnames are resolved by the proxy. Local playback connects "
 "directly."
@@ -2843,11 +2844,11 @@ msgctxt "filter"
 msgid "All"
 msgstr "すべて"
 
-#: src/model.rs:804 src/ui/search.rs:443
+#: src/model.rs:804 src/ui/search.rs:602
 msgid "Songs"
 msgstr "曲"
 
-#: src/model.rs:809 src/ui/library.rs:32 src/ui/search.rs:286
+#: src/model.rs:809 src/ui/library.rs:32 src/ui/search.rs:445
 msgid "Episodes"
 msgstr "エピソード"
 
@@ -3027,7 +3028,7 @@ msgstr "まだ何もありません"
 msgid "Added songs appear here."
 msgstr "追加した曲がここに表示されます。"
 
-#: src/ui/collection.rs:1810 src/ui/home.rs:909
+#: src/ui/collection.rs:1810 src/ui/home.rs:938
 msgid "Your top songs"
 msgstr "あなたのトップソング"
 
@@ -3304,49 +3305,49 @@ msgstr "説明（任意）"
 msgid "Save"
 msgstr "保存"
 
-#: src/ui/home.rs:346
+#: src/ui/home.rs:375
 msgid "Made for you"
 msgstr "あなた向け"
 
-#: src/ui/home.rs:375
+#: src/ui/home.rs:404
 msgid "Your top mixes"
 msgstr "あなたのトップミックス"
 
-#: src/ui/home.rs:396 src/ui/new_releases.rs:25
+#: src/ui/home.rs:425 src/ui/new_releases.rs:25
 msgid "New releases"
 msgstr "新着リリース"
 
 #. Translators: {owner} is the name of the playlist's owner.
-#: src/ui/home.rs:468 src/ui/search.rs:623
+#: src/ui/home.rs:497 src/ui/search.rs:782
 #, rust-format
 msgid "By {owner}"
 msgstr "作成者：{owner}"
 
-#: src/ui/home.rs:695
+#: src/ui/home.rs:724
 msgid "Your podcasts"
 msgstr "あなたのポッドキャスト"
 
 #. Translators: {time} is the time left in an episode, such as 12 min; {show} is the podcast's name.
-#: src/ui/home.rs:701
+#: src/ui/home.rs:730
 #, rust-format
 msgid "{time} left • {show}"
 msgstr "残り{time} • {show}"
 
 #. Translators: {show} is the podcast's name.
-#: src/ui/home.rs:710
+#: src/ui/home.rs:739
 #, rust-format
 msgid "New • {show}"
 msgstr "新着 • {show}"
 
-#: src/ui/home.rs:758 src/ui/home.rs:768 src/ui/home.rs:783
+#: src/ui/home.rs:787 src/ui/home.rs:797 src/ui/home.rs:812
 msgid "Your top artists"
 msgstr "あなたのトップアーティスト"
 
-#: src/ui/home.rs:910
+#: src/ui/home.rs:939
 msgid "Show more top songs"
 msgstr "トップソングをもっと見る"
 
-#: src/ui/home.rs:987
+#: src/ui/home.rs:1016
 msgid "Recommended for you"
 msgstr "おすすめ"
 
@@ -3822,45 +3823,45 @@ msgid "With {first}, {second}, {third} and more"
 msgstr "{first}、{second}、{third}などの曲を収録"
 
 #. Translators: {query} is the text the user searched for.
-#: src/ui/search.rs:66
+#: src/ui/search.rs:68
 #, rust-format
 msgid "No results for “{query}”"
 msgstr "「{query}」の検索結果はありません"
 
-#: src/ui/search.rs:68
+#: src/ui/search.rs:70
 msgid "Check the spelling, or try fewer words."
 msgstr "スペルを確認するか、語句を減らしてください。"
 
-#: src/ui/search.rs:94
+#: src/ui/search.rs:109 src/ui/topbar.rs:397
+msgid "What do you want to play?"
+msgstr "何を再生しますか？"
+
+#: src/ui/search.rs:138
 msgid "Connect to the internet to search songs, artists, and playlists."
 msgstr ""
 "曲、アーティスト、プレイリストを検索するにはインターネットに接続してくださ"
 "い。"
 
-#: src/ui/search.rs:104 src/ui/winamp/playlist.rs:647
-msgid "Search Spotify"
-msgstr "Spotifyを検索"
-
-#: src/ui/search.rs:107
-msgid "Find songs, artists, albums, playlists, and podcasts."
-msgstr "曲、アーティスト、アルバム、プレイリスト、ポッドキャストを探せます。"
-
-#: src/ui/search.rs:112
+#: src/ui/search.rs:144
 msgid "Recent searches"
 msgstr "最近の検索"
 
-#: src/ui/search.rs:151
+#: src/ui/search.rs:174
+msgid "Browse all"
+msgstr "すべてブラウズ"
+
+#: src/ui/search.rs:310
 msgid "Top result"
 msgstr "トップの結果"
 
 #. Translators: {artists} is the album's artist names.
-#: src/ui/search.rs:202
+#: src/ui/search.rs:361
 #, rust-format
 msgid "Album • {artists}"
 msgstr "アルバム • {artists}"
 
 #. Translators: Precedes the song's artist names, which follow as links.
-#: src/ui/search.rs:367
+#: src/ui/search.rs:526
 msgid "Song • "
 msgstr "曲 • "
 
@@ -3932,10 +3933,6 @@ msgstr "アップデートをダウンロード中…"
 #, rust-format
 msgid "Update to {version}"
 msgstr "{version}にアップデート"
-
-#: src/ui/topbar.rs:397
-msgid "What do you want to play?"
-msgstr "何を再生しますか？"
 
 #: src/ui/topbar.rs:577
 msgid ""
@@ -4111,6 +4108,10 @@ msgstr "シーク先：{position}/{duration} ({percent}%)"
 #: src/ui/winamp/mod.rs:1588
 msgid "Open the big window"
 msgstr "大きいウインドウを開く"
+
+#: src/ui/winamp/playlist.rs:647
+msgid "Search Spotify"
+msgstr "Spotifyを検索"
 
 #: src/ui/winamp/playlist.rs:671
 msgid "Remove selected"
@@ -4342,6 +4343,10 @@ msgstr ""
 "この PC または仮想マシンにはありません。グラフィックドライバーをインストール"
 "するか、仮想マシンの GPU アクセラレーションを有効にしてください。詳しくは "
 "{url} を開きますか？"
+
+#~ msgid "Find songs, artists, albums, playlists, and podcasts."
+#~ msgstr ""
+#~ "曲、アーティスト、アルバム、プレイリスト、ポッドキャストを探せます。"
 
 #~ msgctxt "column"
 #~ msgid "Title"

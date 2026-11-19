@@ -2969,6 +2969,8 @@ pub struct CardResponse {
     pub response: egui::Response,
     pub clicked: bool,
     pub play: bool,
+    /// Where the cover was painted, so a page can give it a hairline outline.
+    pub cover_rect: egui::Rect,
 }
 
 /// The cover a [`card`] shows: its shape and what its play control does.
@@ -3055,6 +3057,7 @@ pub fn card(
     let height =
         PAD + image_size + TITLE_GAP + title_row + SUBTITLE_GAP + 2.0 * subtitle_row + BOTTOM_PAD;
     let (rect, response) = ui.allocate_exact_size(vec2(CARD_WIDTH, height), Sense::click());
+    let image_rect = Rect::from_min_size(rect.min + vec2(PAD, PAD), Vec2::splat(image_size));
     response.widget_info(|| {
         egui::WidgetInfo::labeled(
             egui::WidgetType::Button,
@@ -3077,7 +3080,6 @@ pub fn card(
                     .gamma_multiply(if palette.dark { 0.8 } else { 1.0 }),
             );
         }
-        let image_rect = Rect::from_min_size(rect.min + vec2(PAD, PAD), Vec2::splat(image_size));
         let radius = if circular { image_size / 2.0 } else { 6.0 };
         paint_shadow(ui, &palette, image_rect, radius);
         paint_cover(
@@ -3153,6 +3155,7 @@ pub fn card(
         clicked: response.clicked() && !play,
         response,
         play,
+        cover_rect: image_rect,
     }
 }
 
@@ -3184,7 +3187,21 @@ pub fn linked_shelf(
     clicked
 }
 
-fn shelf_cards(ui: &mut Ui, id: &str, add_contents: impl FnOnce(&mut Ui)) {
+/// A shelf whose heading is the larger size a search result gives its
+/// sections, as Spotify's search page titles them.
+pub fn large_shelf(
+    ui: &mut Ui,
+    palette: &Palette,
+    id: &str,
+    title: &str,
+    add_contents: impl FnOnce(&mut Ui),
+) {
+    ui.add_space(8.0);
+    theme::text(ui, title, theme::bold(24.0), palette.text);
+    shelf_cards(ui, id, add_contents);
+}
+
+pub(crate) fn shelf_cards(ui: &mut Ui, id: &str, add_contents: impl FnOnce(&mut Ui)) {
     ui.add_space(4.0);
     crate::autoscroll::show(
         ui,
@@ -3723,7 +3740,22 @@ pub fn search_field(
     hint: &str,
     width: f32,
 ) -> egui::Response {
-    let height = 34.0;
+    search_field_sized(ui, palette, locale, id, text, hint, width, 34.0)
+}
+
+/// The same field at a chosen height, as the Search page's larger one.
+#[allow(clippy::too_many_arguments)]
+pub fn search_field_sized(
+    ui: &mut Ui,
+    palette: &Palette,
+    locale: Locale,
+    id: egui::Id,
+    text: &mut String,
+    hint: &str,
+    width: f32,
+    height: f32,
+) -> egui::Response {
+    let font_size = if height > 40.0 { 15.0 } else { 14.0 };
     let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
     let has_focus = ui.memory(|memory| memory.has_focus(id));
     let fill = if has_focus {
@@ -3740,13 +3772,15 @@ pub fn search_field(
             egui::StrokeKind::Inside,
         );
     }
-    let icon_rect =
-        Rect::from_center_size(pos2(rect.left() + 18.0, rect.center().y), Vec2::splat(16.0));
+    let icon_rect = Rect::from_center_size(
+        pos2(rect.left() + height * 0.53, rect.center().y),
+        Vec2::splat(16.0),
+    );
     Icon::Search
         .image(palette.secondary, 16.0)
         .paint_at(ui, icon_rect);
     let field_rect = Rect::from_min_max(
-        pos2(rect.left() + 34.0, rect.top() + 1.0),
+        pos2(rect.left() + height * 0.53 + 16.0, rect.top() + 1.0),
         pos2(rect.right() - 30.0, rect.bottom() - 1.0),
     );
     let mut child = ui.new_child(
@@ -3762,7 +3796,7 @@ pub fn search_field(
             .painter()
             .layout_job(egui::text::LayoutJob::simple_singleline(
                 buffer.as_str().to_owned(),
-                theme::regular(14.0),
+                theme::regular(font_size),
                 text_color,
             ));
         crate::bidi::reorder(&mut galley);
@@ -3774,7 +3808,7 @@ pub fn search_field(
         egui::TextEdit::singleline(text)
             .id(id)
             .hint_text(egui::RichText::new(hint).color(palette.dim))
-            .font(theme::regular(14.0))
+            .font(theme::regular(font_size))
             .text_color(palette.text)
             .frame(egui::Frame::NONE)
             .desired_width(field_rect.width())
@@ -3789,7 +3823,7 @@ pub fn search_field(
         // the child's top edge, dropping the glyph below the midline.
         let clear_size = 15.0;
         let clear_rect = Rect::from_center_size(
-            pos2(rect.right() - 17.0, rect.center().y),
+            pos2(rect.right() - height * 0.5, rect.center().y),
             Vec2::splat(clear_size + theme::ICON_BUTTON_PAD),
         );
         let mut clear = ui.new_child(

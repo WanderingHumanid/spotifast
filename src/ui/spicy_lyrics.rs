@@ -687,6 +687,25 @@ fn smoothstep(t: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// Whether the playhead is in the interlude, so the row belongs in the sheet
+/// at all. A pause the words have not reached yet takes no room.
+fn interlude_shown(interlude: &Interlude, position: u32) -> bool {
+    position >= interlude.start_ms && position < interlude.end_ms
+}
+
+/// The row's height at `position`: it opens over the first moments of the
+/// pause and closes over its last half second, so the next line neither jumps
+/// in nor jumps back up. Outside the pause it takes no space.
+fn interlude_height(interlude: &Interlude, position: u32, full: f32) -> f32 {
+    if !interlude_shown(interlude, position) {
+        return 0.0;
+    }
+    let opening = (position.saturating_sub(interlude.start_ms) as f32 / 220.0).min(1.0);
+    let closing =
+        (interlude.end_ms.saturating_sub(position) as f32 / DOT_PRE_HIDDEN_MS as f32).min(1.0);
+    full * smoothstep(opening) * smoothstep(closing)
+}
+
 /// The dot line starts at the words' left edge rather than straddling the
 /// middle of the row, so it reads as the next line's opening pause.
 fn dot_centres(rect: Rect, radius: f32, spacing: f32) -> [egui::Pos2; 3] {
@@ -710,19 +729,11 @@ fn draw_interlude(
     motion: &mut Motion,
     spring_dt: f32,
 ) -> Rect {
-    let (slot, _) = ui.allocate_exact_size(vec2(width, size * LINE_LEADING), Sense::hover());
+    // The row exists only while the pause does, and its height opens and
+    // closes with the dots rather than reserving a gap all song long.
+    let height = interlude_height(interlude, position, size * LINE_LEADING);
+    let (slot, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
     let rect = Rect::from_min_size(pos2(left, slot.top()), slot.size());
-    if position < interlude.start_ms || position >= interlude.end_ms {
-        // Idle dots begin their next interlude from Spicy's resting pose, and
-        // settled springs let the view stop repainting.
-        for dot in 0..3 {
-            let springs = motion.dots.entry((ordinal as u32, dot as u32)).or_default();
-            if springs.moving() {
-                *springs = DotSprings::idle();
-            }
-        }
-        return rect;
-    }
     // The group fades in as the dots start and out over their last half
     // second, which is the fade Spicy gives its dot line.
     let arriving = (position.saturating_sub(interlude.start_ms) as f32 / 160.0).min(1.0);
@@ -1077,17 +1088,18 @@ fn contents(app: &mut App, ui: &mut egui::Ui, rect: Rect, top_inset: f32, fullsc
             let mut measure = Measure::default();
             let mut active_rect = None;
             let spring_dt = motion.dt * app.settings.spicy_motion.scale();
+            // Only the pause the words are in takes a row; one later in the
+            // song would otherwise sit in the sheet as a blank stretch.
             let interlude_at = |after: Option<usize>| {
-                interludes
-                    .iter()
-                    .position(|interlude| interlude.after == after)
+                interludes.iter().enumerate().find(|(_, interlude)| {
+                    interlude.after == after && interlude_shown(interlude, now.position_ms)
+                })
             };
             for (index, line) in lyrics.lines.iter().enumerate() {
                 // The intro counts as an interlude too: long before the first
                 // word, Spicy shows the same three dots.
                 if index == 0
-                    && let Some(ordinal) = interlude_at(None)
-                    && let Some(interlude) = interludes.get(ordinal)
+                    && let Some((ordinal, interlude)) = interlude_at(None)
                 {
                     let rect = draw_interlude(
                         ui,
@@ -1101,9 +1113,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui, rect: Rect, top_inset: f32, fullsc
                         &mut motion,
                         spring_dt,
                     );
-                    if now.position_ms >= interlude.start_ms && now.position_ms < interlude.end_ms {
-                        active_rect = Some(rect);
-                    }
+                    active_rect = Some(rect);
                 }
                 let is_active = active == Some(index);
                 let depth = line_depth(index, active, fullscreen);
@@ -1132,9 +1142,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui, rect: Rect, top_inset: f32, fullsc
                 ui.add_space(gap);
                 // An instrumental stretch is its own row, and the row the view
                 // follows while only the music plays.
-                if let Some(ordinal) = interlude_at(Some(index))
-                    && let Some(interlude) = interludes.get(ordinal)
-                {
+                if let Some((ordinal, interlude)) = interlude_at(Some(index)) {
                     let rect = draw_interlude(
                         ui,
                         Color32::WHITE,
@@ -1147,11 +1155,16 @@ fn contents(app: &mut App, ui: &mut egui::Ui, rect: Rect, top_inset: f32, fullsc
                         &mut motion,
                         spring_dt,
                     );
-                    if now.position_ms >= interlude.start_ms && now.position_ms < interlude.end_ms {
-                        active_rect = Some(rect);
-                    }
+                    active_rect = Some(rect);
                 }
             }
+            // A pause that has passed, or not arrived, keeps no dot springs:
+            // their last fade would otherwise keep asking for frames.
+            motion.dots.retain(|(ordinal, _), _| {
+                interludes
+                    .get(*ordinal as usize)
+                    .is_some_and(|interlude| interlude_shown(interlude, now.position_ms))
+            });
             if let Some(attribution) = lyrics.attribution.as_ref() {
                 widgets::lyrics_attribution(
                     app,
@@ -2340,6 +2353,36 @@ mod tests {
         assert_eq!(second.1, third.0);
         assert!(third.1 < 16_000, "the dots finish before the vocal");
         assert_eq!(third.1, 16_000 - DOT_PRE_HIDDEN_MS - 50);
+    }
+
+    /// A pause takes no room until the words reach it, and its row opens and
+    /// closes with the dots instead of holding a blank stretch all song long.
+    #[test]
+    fn an_interlude_row_only_exists_while_the_pause_does() {
+        let interlude = Interlude {
+            after: Some(0),
+            start_ms: 10_000,
+            end_ms: 16_000,
+        };
+        assert_eq!(interlude_height(&interlude, 9_999, 40.0), 0.0);
+        assert_eq!(
+            interlude_height(&interlude, 10_000, 40.0),
+            0.0,
+            "the row opens from nothing"
+        );
+        assert!(interlude_height(&interlude, 10_400, 40.0) > 0.0);
+        assert_eq!(interlude_height(&interlude, 13_000, 40.0), 40.0);
+        assert!(
+            interlude_height(&interlude, 15_750, 40.0) < 40.0,
+            "the row closes before the next word"
+        );
+        assert_eq!(
+            interlude_height(&interlude, 16_000, 40.0),
+            0.0,
+            "and is gone when the vocals return"
+        );
+        assert_eq!(interlude_height(&interlude, 20_000, 40.0), 0.0);
+        assert!(!interlude_shown(&interlude, 20_000));
     }
 
     /// The dot line begins at the words' left edge instead of sitting in the

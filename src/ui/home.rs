@@ -72,6 +72,29 @@ struct Tile {
     song: Option<crate::api::models::Track>,
 }
 
+/// A home card whose cover carries a hairline outline, so the art reads as
+/// its own element without a container around the whole card.
+fn outlined_card(
+    ui: &mut egui::Ui,
+    app: &mut App,
+    image: Option<&str>,
+    title: &str,
+    subtitle: &str,
+    cover: widgets::CardCover,
+) -> widgets::CardResponse {
+    let circular = cover.circular;
+    let card = widgets::card(ui, app, image, title, subtitle, cover);
+    let rect = card.cover_rect;
+    let radius = if circular { rect.width() / 2.0 } else { 6.0 };
+    ui.painter().rect_stroke(
+        rect,
+        CornerRadius::same(radius.round() as u8),
+        egui::Stroke::new(1.0, app.palette.text.gamma_multiply(0.10)),
+        egui::StrokeKind::Inside,
+    );
+    card
+}
+
 /// The height of a quick-access tile, and so the side of its cover.
 const TILE_HEIGHT: f32 = 60.0;
 /// How many quick-access tiles Home shows, as Spotify does.
@@ -223,6 +246,12 @@ fn quick_access(app: &mut App, ui: &mut egui::Ui) {
                         palette.surface
                     };
                     ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
+                    ui.painter().rect_stroke(
+                        rect,
+                        CornerRadius::same(6),
+                        egui::Stroke::new(1.0, palette.text.gamma_multiply(0.10)),
+                        egui::StrokeKind::Inside,
+                    );
                     let cover = Rect::from_min_size(rect.min, Vec2::splat(TILE_HEIGHT));
                     if *liked {
                         super::sidebar::liked_cover(ui, cover, 6.0);
@@ -424,7 +453,7 @@ fn release_card(app: &mut App, ui: &mut egui::Ui, album: &Album) {
     let context_here = app.playing_context_uri().as_deref() == Some(album.uri.as_str());
     let playing_here = context_here && app.believed_playing();
     let card_art = app.art_px(widgets::CARD_ART);
-    let card = widgets::card(
+    let card = outlined_card(
         ui,
         app,
         pick_image(&album.images, card_art),
@@ -470,7 +499,7 @@ fn playlist_cards(app: &mut App, ui: &mut egui::Ui, menu: &str, playlists: &[Pla
         let context_here = app.playing_context_uri().as_deref() == Some(playlist.uri.as_str());
         let playing_here = context_here && app.believed_playing();
         let card_art = app.art_px(widgets::CARD_ART);
-        let card = widgets::card(
+        let card = outlined_card(
             ui,
             app,
             pick_image(&playlist.images, card_art),
@@ -560,7 +589,7 @@ fn recently_played(app: &mut App, ui: &mut egui::Ui) {
             for entry in &tracks {
                 let track = &entry.track;
                 let card_art = app.art_px(widgets::CARD_ART);
-                let card = widgets::card(
+                let card = outlined_card(
                     ui,
                     app,
                     track.image(card_art),
@@ -711,7 +740,7 @@ fn podcasts(app: &mut App, ui: &mut egui::Ui) {
                     }
                 };
                 let card_art = app.art_px(widgets::CARD_ART);
-                let card = widgets::card(
+                let card = outlined_card(
                     ui,
                     app,
                     pick_image(&episode.images, card_art)
@@ -787,7 +816,7 @@ fn top_artists(app: &mut App, ui: &mut egui::Ui) {
                     app.playing_context_uri().as_deref() == Some(artist.uri.as_str());
                 let playing_here = context_here && app.believed_playing();
                 let card_art = app.art_px(widgets::CARD_ART);
-                let card = widgets::card(
+                let card = outlined_card(
                     ui,
                     app,
                     pick_image(&artist.images, card_art),

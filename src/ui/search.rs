@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
-use egui::{Align, CornerRadius, Layout, Rect, Sense, Vec2, pos2, vec2};
+use egui::{
+    Align, Color32, CornerRadius, Layout, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2,
+};
 
 use crate::api::models::{Artist, ArtistRef, PlayableItem, SearchResults, pick_image};
 use crate::app::App;
@@ -14,11 +16,11 @@ use super::widgets::{self, TrackRow};
 
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
-    if app.search.committed.is_empty() && app.search.typed_at.is_none() {
+    header(app, ui);
+    if app.search.query.trim().is_empty() {
         recent(app, ui);
         return;
     }
-    ui.add_space(4.0);
     let labels: Vec<_> = SearchFilter::ALL
         .iter()
         .map(|f| (*f, f.label(app.locale)))
@@ -80,9 +82,51 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     }
 }
 
+/// The Search page's own heading and field, as Spotify's page has above its
+/// results. It edits the same query as the top bar's field.
+fn header(app: &mut App, ui: &mut egui::Ui) {
+    let palette = app.palette;
+    ui.add_space(8.0);
+    theme::text(
+        ui,
+        gettext(app.locale, "Search").as_ref(),
+        theme::bold(30.0),
+        palette.text,
+    );
+    ui.add_space(12.0);
+    let id = egui::Id::new("search-page");
+    let before = app.search.query.clone();
+    let selected = egui::TextEdit::load_state(ui.ctx(), id)
+        .and_then(|state| state.cursor.char_range())
+        .is_some_and(|range| !range.is_empty());
+    let width = ui.available_width().min(520.0);
+    let response = widgets::search_field_sized(
+        ui,
+        &palette,
+        app.locale,
+        id,
+        &mut app.search.query,
+        &gettext(app.locale, "What do you want to play?"),
+        width,
+        46.0,
+    );
+    if app.search.query != before {
+        // Typing over a selection, or emptying the field, starts a new query
+        // rather than editing the last one.
+        if selected || app.search.query.is_empty() {
+            app.actions.push(Action::EndSearchRun);
+        }
+        app.search.typed_at = Some(std::time::Instant::now());
+    }
+    if response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+        let query = app.search.query.clone();
+        app.actions.push(Action::Search(query));
+    }
+    ui.add_space(12.0);
+}
+
 fn recent(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
-    ui.add_space(6.0);
     if !app.network_reachable && app.settings.search_history.is_empty() {
         widgets::empty_state(
             ui,
@@ -96,33 +140,148 @@ fn recent(app: &mut App, ui: &mut egui::Ui) {
         );
         return;
     }
-    if app.settings.search_history.is_empty() {
-        widgets::empty_state(
-            ui,
-            &palette,
-            Icon::Search,
-            &gettext(app.locale, "Search Spotify"),
-            &gettext(
-                app.locale,
-                "Find songs, artists, albums, playlists, and podcasts.",
-            ),
-        );
-        return;
-    }
-    theme::section_title(ui, &palette, &gettext(app.locale, "Recent searches"));
-    ui.add_space(6.0);
-    let history = app.settings.search_history.clone();
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
-        for query in &history {
-            let (response, forget) = theme::soft_button_dismiss(ui, &palette, Icon::Clock, query);
-            if forget {
-                app.actions.push(Action::ForgetSearch(query.clone()));
-            } else if response.clicked() {
-                app.actions.push(Action::Search(query.clone()));
+    if !app.settings.search_history.is_empty() {
+        theme::section_title(ui, &palette, &gettext(app.locale, "Recent searches"));
+        ui.add_space(6.0);
+        let history = app.settings.search_history.clone();
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
+            for query in &history {
+                let (response, forget) =
+                    theme::soft_button_dismiss(ui, &palette, Icon::Clock, query);
+                if forget {
+                    app.actions.push(Action::ForgetSearch(query.clone()));
+                } else if response.clicked() {
+                    app.actions.push(Action::Search(query.clone()));
+                }
             }
-        }
-    });
+        });
+        ui.add_space(22.0);
+    }
+    browse(app, ui);
+}
+
+/// A section heading at the size Spotify gives its search and browse titles.
+fn heading(ui: &mut egui::Ui, palette: &theme::Palette, text: &str) {
+    theme::text(ui, text, theme::bold(24.0), palette.text);
+}
+
+/// Spotify's browse grid: colour blocks that open a search for a genre or
+/// mood, each with a tilted cover in the corner.
+fn browse(app: &mut App, ui: &mut egui::Ui) {
+    let palette = app.palette;
+    let locale = app.locale;
+    heading(ui, &palette, &gettext(locale, "Browse all"));
+    ui.add_space(12.0);
+    // The tiles are search seeds rather than interface wording: each one runs
+    // the query Spotify's catalogue matches for that genre or mood, so the
+    // names stay as those queries.
+    let labels: [&str; 15] = [
+        "Pop",
+        "Hip-Hop",
+        "Rock",
+        "Indie",
+        "Electronic",
+        "R&B",
+        "Jazz",
+        "Classical",
+        "Metal",
+        "Chill",
+        "Focus",
+        "Workout",
+        "Latin",
+        "Country",
+        "Party",
+    ];
+    let colours = [
+        Color32::from_rgb(0x8D, 0x67, 0xAB),
+        Color32::from_rgb(0xBA, 0x5D, 0x07),
+        Color32::from_rgb(0xE1, 0x33, 0x00),
+        Color32::from_rgb(0x60, 0x81, 0x08),
+        Color32::from_rgb(0xDC, 0x14, 0x8C),
+        Color32::from_rgb(0x8C, 0x19, 0x32),
+        Color32::from_rgb(0x47, 0x7D, 0x95),
+        Color32::from_rgb(0x7D, 0x4B, 0x32),
+        Color32::from_rgb(0xE8, 0x11, 0x5B),
+        Color32::from_rgb(0x1E, 0x32, 0x64),
+        Color32::from_rgb(0x50, 0x37, 0x50),
+        Color32::from_rgb(0x77, 0x77, 0x77),
+        Color32::from_rgb(0xE1, 0x11, 0x8C),
+        Color32::from_rgb(0xD8, 0x40, 0x00),
+        Color32::from_rgb(0xAF, 0x28, 0x96),
+    ];
+    let available = ui.available_width();
+    let gap = 12.0;
+    let columns = ((available / 210.0).floor() as usize).clamp(2, 6);
+    let tile_width = (available - gap * (columns as f32 - 1.0)) / columns as f32;
+    let tile_height = (tile_width * 0.56).clamp(82.0, 130.0);
+    let rows = labels.len().div_ceil(columns);
+    for row in 0..rows {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            for column in 0..columns {
+                let index = row * columns + column;
+                let Some(label) = labels.get(index) else {
+                    break;
+                };
+                let colour = colours[index];
+                let (rect, response) =
+                    ui.allocate_exact_size(vec2(tile_width, tile_height), Sense::click());
+                response.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::WidgetType::Button, true, *label)
+                });
+                if ui.is_rect_visible(rect) {
+                    let fill = if ui.rect_contains_pointer(rect) {
+                        super::blend(colour, Color32::WHITE, 0.10)
+                    } else {
+                        colour
+                    };
+                    let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+                    painter.rect_filled(rect, CornerRadius::same(10), fill);
+                    painter.rect_stroke(
+                        rect,
+                        CornerRadius::same(10),
+                        Stroke::new(1.0, Color32::from_white_alpha(20)),
+                        StrokeKind::Inside,
+                    );
+                    // A tilted cover hangs off the corner, as Spotify's
+                    // browse cards carry one.
+                    let size = tile_height * 0.82;
+                    let centre = pos2(rect.right() - size * 0.18, rect.bottom() + size * 0.16);
+                    let angle = -0.4_f32;
+                    let axis = vec2(angle.cos(), angle.sin()) * (size * 0.5);
+                    let perp = vec2(-angle.sin(), angle.cos()) * (size * 0.5);
+                    painter.add(egui::Shape::convex_polygon(
+                        vec![
+                            centre - axis - perp,
+                            centre + axis - perp,
+                            centre + axis + perp,
+                            centre - axis + perp,
+                        ],
+                        Color32::from_white_alpha(22),
+                        Stroke::new(1.0, Color32::from_white_alpha(30)),
+                    ));
+                    let text = widgets::ellipsized(
+                        ui,
+                        label,
+                        theme::bold(20.0),
+                        Color32::WHITE,
+                        tile_width - 28.0,
+                        1,
+                    );
+                    painter.galley(
+                        pos2(rect.left() + 14.0, rect.top() + 12.0),
+                        text,
+                        Color32::WHITE,
+                    );
+                }
+                if response.clicked() {
+                    app.actions.push(Action::Search((*label).to_string()));
+                }
+            }
+        });
+        ui.add_space(gap);
+    }
 }
 
 fn all(app: &mut App, ui: &mut egui::Ui, results: &SearchResults) {
@@ -148,7 +307,7 @@ fn all(app: &mut App, ui: &mut egui::Ui, results: &SearchResults) {
         };
         ui.vertical(|ui| {
             ui.set_width(top_width);
-            theme::section_title(ui, &palette, &gettext(locale, "Top result"));
+            heading(ui, &palette, &gettext(locale, "Top result"));
             ui.add_space(4.0);
             if let Some(artist) = top_artist {
                 top_result(
@@ -283,7 +442,7 @@ fn all(app: &mut App, ui: &mut egui::Ui, results: &SearchResults) {
         .as_ref()
         .is_some_and(|page| !page.items.is_empty())
     {
-        theme::section_title(ui, &palette, &gettext(locale, "Episodes"));
+        heading(ui, &palette, &gettext(locale, "Episodes"));
         ui.add_space(4.0);
         episodes(app, ui, results, 4);
     }
@@ -440,7 +599,7 @@ fn songs(app: &mut App, ui: &mut egui::Ui, results: &SearchResults, limit: usize
     if page.items.is_empty() {
         return;
     }
-    theme::section_title(ui, &palette, &gettext(app.locale, "Songs"));
+    heading(ui, &palette, &gettext(app.locale, "Songs"));
     ui.add_space(4.0);
     let items: Vec<PlayableItem> = page
         .items
@@ -520,7 +679,7 @@ fn shelf_artists(app: &mut App, ui: &mut egui::Ui, results: &SearchResults) {
     if page.items.is_empty() {
         return;
     }
-    widgets::shelf(
+    widgets::large_shelf(
         ui,
         &palette,
         "search-artists",
@@ -588,7 +747,7 @@ fn shelf_albums(app: &mut App, ui: &mut egui::Ui, results: &SearchResults) {
     if page.items.is_empty() {
         return;
     }
-    widgets::shelf(
+    widgets::large_shelf(
         ui,
         &palette,
         "search-albums",
@@ -661,7 +820,7 @@ fn shelf_playlists(app: &mut App, ui: &mut egui::Ui, results: &SearchResults) {
     if page.items.is_empty() {
         return;
     }
-    widgets::shelf(
+    widgets::large_shelf(
         ui,
         &palette,
         "search-playlists",
@@ -712,7 +871,7 @@ fn shelf_shows(app: &mut App, ui: &mut egui::Ui, results: &SearchResults) {
     if page.items.is_empty() {
         return;
     }
-    widgets::shelf(
+    widgets::large_shelf(
         ui,
         &palette,
         "search-shows",
